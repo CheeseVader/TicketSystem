@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Solicitar apoyo · R5</title>
+  <link rel="stylesheet" href="/css/app.css?v=5">
+</head>
+<body class="station-body">
+<header class="station-top">
+  <div class="brand">🏭 <span id="stationTitle">Estación</span></div>
+  <div id="clock"></div>
+</header>
+
+<main class="station-main">
+  <section class="station-card">
+    <div>
+      <span class="eyebrow">CLIENT SIDE</span>
+      <h1 id="mainTitle">Solicitar apoyo</h1>
+      <p id="mainHelp">Selecciona el equipo que necesitas. La alerta aparecerá de inmediato en el dashboard correspondiente.</p>
+    </div>
+
+    <div id="departmentStep" class="support-grid">
+      <button class="support systems" data-dept="systems">
+        <span class="support-icon">🖥️</span>
+        <strong>SISTEMAS</strong>
+        <small>SMES, impresora, PC u otros</small>
+      </button>
+      <button class="support maintenance" data-dept="maintenance">
+        <span class="support-icon">🛠️</span>
+        <strong>MANTENIMIENTO</strong>
+        <small>Strap u otros</small>
+      </button>
+    </div>
+
+    <div id="stationStatus" class="status-box info">Sistema operativo. Selecciona un tipo de apoyo.</div>
+    <div class="station-active" id="activeTickets"></div>
+  </section>
+</main>
+
+<div id="categoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="categoryModalTitle">
+  <div class="category-modal-card">
+    <div class="category-modal-head">
+      <div>
+        <span class="eyebrow">SELECCIONA UNA CATEGORÍA</span>
+        <h2 id="categoryModalTitle">Sistemas</h2>
+        <p id="categoryModalHelp">Selecciona el tipo de apoyo requerido.</p>
+      </div>
+      <button id="closeCategoryModal" class="modal-close" type="button" aria-label="Cerrar">×</button>
+    </div>
+    <div id="categoryGrid" class="category-grid modal-category-grid"></div>
+    <div class="category-modal-footer">
+      <button id="backButton" class="btn secondary" type="button">← Regresar</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmationModal" class="modal-backdrop hidden confirmation-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirmationTitle">
+  <div class="confirmation-card">
+    <button id="closeConfirmation" class="modal-close confirmation-close" type="button" aria-label="Cerrar">×</button>
+    <div class="confirmation-check">✓</div>
+    <h2 id="confirmationTitle">Solicitud recibida</h2>
+    <p id="confirmationMessage" class="confirmation-message">Se atenderá enseguida.</p>
+    <div id="confirmationDetail" class="confirmation-detail">Sistemas · SMES</div>
+  </div>
+</div>
+
+<div id="otherModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <div class="modal-icon">⋯</div>
+    <h2>Otros</h2>
+    <p>Describe brevemente el problema. Este campo es opcional.</p>
+    <textarea id="otherNotes" maxlength="500" placeholder="Ej. Monitor sin imagen, sensor dañado, falla no listada..."></textarea>
+    <div class="modal-actions">
+      <button id="cancelOther" class="btn secondary" type="button">Cancelar</button>
+      <button id="submitOther" class="btn primary" type="button">Solicitar apoyo</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/station.js?v=5"></script>
+</body>
+</html>

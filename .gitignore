@@ -1,0 +1,44 @@
+﻿# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Credenciales
+.env
+.env.*
+!.env.example
+
+# Backups
+_backup_*/
+backup/
+backups/
+
+# Pruebas temporales
+_audio_test/
+temp/
+tmp/
+
+# Windows / IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Runtime
+*.pid
+*.pid.lock
+
+# Coverage / cache
+coverage/
+.nyc_output/
+.cache/
+
+# Diagnosticos locales
+postgresql-config-check.txt
+
+# Backups individuales
+*.backup-*
+*.bak
