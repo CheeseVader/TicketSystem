@@ -42,3 +42,11 @@ postgresql-config-check.txt
 # Backups individuales
 *.backup-*
 *.bak
+
+# ANDON - secretos/locales
+release-output/
+**/updater.env
+**/backup.env
+*.dump
+*.sql.gz
+

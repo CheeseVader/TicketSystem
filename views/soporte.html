@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portal de Soporte</title><link rel="stylesheet" href="/css/soporte.css?v=1.3.1"></head>
+<body><main class="page"><section class="card">
+<div class="eyebrow">ANDON SUPPORT</div><h1>Portal de Soporte</h1><p class="lead">Solicita apoyo de Sistemas o Mantenimiento.</p>
+<form id="supportForm" autocomplete="off">
+<label>Nombre del solicitante *</label><input id="requesterName" maxlength="100" required placeholder="Nombre completo">
+<label>Área / Departamento *</label><select id="requesterArea" required><option value="">Seleccione...</option></select>
+<label>Ubicación donde requiere el apoyo *</label><select id="supportLocation" required><option value="">Seleccione...</option></select>
+<label>Tipo de apoyo *</label>
+<div class="dept-grid"><button type="button" class="dept" data-dept="systems"><span class="tech-icon">▣</span><strong>SISTEMAS</strong></button>
+<button type="button" class="dept" data-dept="maintenance"><span class="tech-icon">◇</span><strong>MANTENIMIENTO</strong></button></div>
+<input type="hidden" id="department" required>
+<div id="classificationWrap" class="hidden">
+<label>Categoría *</label><select id="categoryGroup"><option value="">Seleccione...</option></select>
+<label>Tipo de incidencia *</label><select id="requestType"><option value="">Seleccione...</option></select>
+<label>Descripción breve *</label>
+<textarea id="problemDescription" maxlength="500" rows="4" required placeholder="Ejemplo: La impresora Zebra aparece offline y no permite imprimir etiquetas."></textarea>
+<div class="field-help">Describe brevemente qué está fallando o qué apoyo necesitas. Máximo 500 caracteres.</div>
+</div>
+<button id="submitBtn" class="submit" type="submit">SOLICITAR APOYO</button><div id="message" class="message" aria-live="polite"></div>
+</form></section></main>
+<div id="successModal" class="modal hidden"><div class="modal-card"><div class="ok">✓</div><h2>Solicitud recibida</h2>
+<p>Se atenderá enseguida.</p><div id="successDetail" class="detail"></div><button id="closeSuccess" type="button">Aceptar</button></div></div>
+<script src="/socket.io/socket.io.js"></script><script src="/js/soporte.js?v=1.3.1"></script></body></html>

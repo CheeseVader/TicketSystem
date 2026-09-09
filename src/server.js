@@ -18,7 +18,7 @@ const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use((req,res,next)=>{
-  if (req.path.startsWith('/station/') || req.path === '/dashboard' || req.path === '/login' || /\.(js|css|html)$/.test(req.path)) {
+  if (req.path.startsWith('/station/') || req.path === '/soporte' || req.path === '/dashboard' || req.path === '/login' || /\.(js|css|html)$/.test(req.path)) {
     res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
     res.set('Pragma','no-cache');
     res.set('Expires','0');
@@ -46,12 +46,12 @@ function requireAuth(req,res,next){
 function isManager(user){ return user && ['superadmin','admin'].includes(user.role); }
 function requireManager(req,res,next){
   if(!req.session.user) return res.status(401).json({error:'No autenticado'});
-  if(!isManager(req.session.user)) return res.status(403).json({error:'Sólo Administradores'});
+  if(!isManager(req.session.user)) return res.status(403).json({error:'SÃ³lo Administradores'});
   next();
 }
 function requireSuperadmin(req,res,next){
   if(!req.session.user) return res.status(401).json({error:'No autenticado'});
-  if(req.session.user.role!=='superadmin') return res.status(403).json({error:'Sólo Superadmin'});
+  if(req.session.user.role!=='superadmin') return res.status(403).json({error:'SÃ³lo Superadmin'});
   next();
 }
 function userDepartment(user){ return user?.role==='engineer' ? user.department : null; }
@@ -129,46 +129,109 @@ app.post('/login',async(req,res)=>{
   const username=String(req.body.username||'').trim();
   const {rows}=await pool.query(`SELECT * FROM users WHERE username=$1 AND active=TRUE AND deleted_at IS NULL`,[username]);
   const user=rows[0];
-  if(!user || !(await bcrypt.compare(String(req.body.password||''),user.password_hash))) return res.status(401).send('Usuario o contraseña incorrectos. <a href="/login">Regresar</a>');
+  if(!user || !(await bcrypt.compare(String(req.body.password||''),user.password_hash))) return res.status(401).send('Usuario o contraseÃ±a incorrectos. <a href="/login">Regresar</a>');
   req.session.user={id:user.id,username:user.username,fullName:user.full_name,role:user.role,department:user.department||null};
   res.redirect('/dashboard');
 });
 app.post('/logout',(req,res)=>req.session.destroy(()=>res.redirect('/login')));
 app.get('/station/:code',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found || !found.station.enabled || found.station.group_enabled===false) return res.status(404).send('Estación no encontrada');
+  if(!found || !found.station.enabled || found.station.group_enabled===false) return res.status(404).send('EstaciÃ³n no encontrada');
   if(found.alias) return res.redirect(302,`/station/${found.station.code}`);
   res.sendFile(path.join(__dirname,'..','views','station.html'));
 });
 app.get('/dashboard',requireAuth,(req,res)=>res.sendFile(path.join(__dirname,'..','views','dashboard.html')));
+app.get('/soporte',(req,res)=>res.sendFile(path.join(__dirname,'..','views','soporte.html'))); // ANDON SOPORTE R1
 
 app.get('/api/build',(req,res)=>res.json({build:APP_BUILD,bootId:BOOT_ID,serverTime:new Date().toISOString()}));
 app.get('/api/me',(req,res)=>res.json({user:req.session.user||null}));
 
+// ============================================================
+// ANDON SOPORTE R1 - PORTAL ADMINISTRATIVO
+// ============================================================
+app.get('/api/soporte/catalog',async(req,res)=>{
+  try{
+    const [areas,groups,requests]=await Promise.all([
+      pool.query(`SELECT name FROM support_areas WHERE enabled=TRUE ORDER BY sort_order,name`),
+      pool.query(`SELECT name FROM production_groups WHERE enabled=TRUE AND archived_at IS NULL ORDER BY sort_order,name`),
+      pool.query(`SELECT department,code,label,category_group FROM admin_support_requests_catalog WHERE enabled=TRUE ORDER BY department,sort_order,label`)
+    ]);
+
+    // Ubicacion = Areas/Departamentos + Lineas/Grupos.
+    // No incluir estaciones individuales (INPUT, PACKING, ESCANEO, etc.).
+    const locationMap=new Map();
+
+    for(const item of [...areas.rows,...groups.rows]){
+      const name=String(item.name||'').trim();
+      if(!name) continue;
+
+      const key=name
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g,'')
+        .toUpperCase();
+
+      if(!locationMap.has(key)){
+        locationMap.set(key,{name});
+      }
+    }
+
+    res.json({
+      areas:areas.rows,
+      locations:[...locationMap.values()],
+      requests:requests.rows
+    });
+  }catch(e){
+    console.error('soporte catalog',e);
+    res.status(500).json({error:'No se pudo cargar el catalogo de soporte'});
+  }
+});
+
+app.post('/api/soporte/requests',async(req,res)=>{
+  try{
+    const requesterName=String(req.body.requesterName||'').trim().slice(0,100);
+    const requesterArea=String(req.body.requesterArea||'').trim().slice(0,100);
+    const supportLocation=String(req.body.supportLocation||'').trim().slice(0,160);
+    const department=String(req.body.department||'').toLowerCase();
+    const requestType=String(req.body.requestType||'').toLowerCase();
+    const description=String(req.body.description||'').trim().slice(0,500);
+    if(!requesterName||!requesterArea||!supportLocation)return res.status(400).json({error:'Nombre, area y ubicacion son requeridos.'});
+    if(!['systems','maintenance'].includes(department))return res.status(400).json({error:'Departamento invalido.'});
+    const cat=(await pool.query(`SELECT code,label FROM admin_support_requests_catalog WHERE department=$1 AND code=$2 AND enabled=TRUE`,[department,requestType])).rows[0];
+    if(!cat)return res.status(400).json({error:'Peticion invalida.'});
+    if(!description)return res.status(400).json({error:'Agrega una descripción breve del problema.'});
+
+    const station=(await pool.query(`SELECT s.id,s.code FROM stations s LEFT JOIN production_groups g ON g.id=s.group_id WHERE s.enabled=TRUE AND COALESCE(g.enabled,TRUE)=TRUE AND (UPPER(s.code)=UPPER($1) OR UPPER(COALESCE(g.name,'')||' - '||s.label)=UPPER($1)) LIMIT 1`,[supportLocation])).rows[0]||null;
+    const sla=await pickSla(department,requestType,station?.id||null);
+    const notes=description;
+    const q=(await pool.query(`INSERT INTO support_requests(station_id,department,category,status,requested_by,notes,sla_policy_id,source,requester_area,support_location,admin_request_type) VALUES($1,$2,$3,'unassigned',$4,$5,$6,'administrative',$7,$8,$9) RETURNING *`,[station?.id||null,department,requestType,requesterName,notes,sla?.id||null,requesterArea,supportLocation,requestType])).rows[0];
+    io.emit('request:changed',{action:'created',id:q.id,stationCode:supportLocation,department,category:requestType,category_label:cat.label,source:'administrative',requesterArea,requester_area:requesterArea,supportLocation,support_location:supportLocation});
+    res.status(201).json({...q,department_label:department==='systems'?'Sistemas':'Mantenimiento',request_label:cat.label});
+  }catch(e){console.error('soporte request',e);res.status(500).json({error:`No se pudo crear la solicitud${e.code?' ('+e.code+')':''}`});}
+});
 app.get('/api/categories',async(req,res)=>{
   const department=String(req.query.department||'').toLowerCase();
-  if(!['systems','maintenance'].includes(department)) return res.status(400).json({error:'Departamento inválido'});
+  if(!['systems','maintenance'].includes(department)) return res.status(400).json({error:'Departamento invÃ¡lido'});
   const {rows}=await pool.query(`SELECT code,label,icon,sort_order FROM support_categories WHERE department=$1 AND enabled=TRUE ORDER BY sort_order,label`,[department]);
   res.json(rows);
 });
 
 app.get('/api/stations/:code',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found) return res.status(404).json({error:'Estación no encontrada'});
+  if(!found) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
   res.json(found.station);
 });
 
 app.get('/api/stations/:code/requests',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found) return res.status(404).json({error:'Estación no encontrada'});
+  if(!found) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
   const {rows}=await pool.query(`
     SELECT r.id,r.department,r.category,r.status,r.requested_at,r.assigned_at,r.attended_at,r.resolved_at,r.notes,
            t.id ticket_id,t.ticket_number,t.status ticket_status,t.assigned_to,t.auto_close_at,
-           u.full_name attended_by_name,c.label category_label,c.icon category_icon
+           u.full_name attended_by_name,COALESCE(ac.label,c.label,r.category) category_label,c.icon category_icon
     FROM support_requests r
     LEFT JOIN tickets t ON t.request_id=r.id
     LEFT JOIN users u ON u.id=t.assigned_to
-    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
     WHERE r.station_id=$1 AND r.status = ANY($2::text[])
     ORDER BY r.requested_at`,[found.station.id,OPEN_REQUEST_STATUSES]);
   res.json(rows.map(x=>({...x,status:x.ticket_status||x.status})));
@@ -176,21 +239,21 @@ app.get('/api/stations/:code/requests',async(req,res)=>{
 
 app.post('/api/requests',async(req,res)=>{
   const {stationCode,department,category,requestedBy,notes}=req.body;
-  if(!['systems','maintenance'].includes(department)) return res.status(400).json({error:'Departamento inválido'});
-  if(!category) return res.status(400).json({error:'Selecciona una categoría.'});
+  if(!['systems','maintenance'].includes(department)) return res.status(400).json({error:'Departamento invÃ¡lido'});
+  if(!category) return res.status(400).json({error:'Selecciona una categorÃ­a.'});
   const normalizedCategory=String(category).toLowerCase();
   const cleanNotes=String(notes||'').trim().slice(0,500);
   const found=await resolveStation(stationCode);
-  if(!found || !found.station.enabled) return res.status(404).json({error:'Estación no encontrada'});
+  if(!found || !found.station.enabled) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
   const valid=(await pool.query(`SELECT code,label,icon FROM support_categories WHERE department=$1 AND code=$2 AND enabled=TRUE`,[department,normalizedCategory])).rows[0];
-  if(!valid) return res.status(400).json({error:'Categoría inválida para esta área.'});
+  if(!valid) return res.status(400).json({error:'CategorÃ­a invÃ¡lida para esta Ã¡rea.'});
 
-  // Bloquear sólo mientras exista una incidencia ACTIVA; una resuelta permite un nuevo evento independiente.
+  // Bloquear sÃ³lo mientras exista una incidencia ACTIVA; una resuelta permite un nuevo evento independiente.
   const active=(await pool.query(`SELECT id,status FROM support_requests WHERE station_id=$1 AND department=$2 AND status IN ('unassigned','assigned','in_progress','waiting','escalated') ORDER BY requested_at DESC LIMIT 1`,[found.station.id,department])).rows[0];
-  if(active) return res.status(409).json({error:'Ya existe una incidencia activa de esta área para este equipo.'});
+  if(active) return res.status(409).json({error:'Ya existe una incidencia activa de esta Ã¡rea para este equipo.'});
 
   const sla=await pickSla(department,normalizedCategory,found.station.id);
-  const q=await pool.query(`INSERT INTO support_requests(station_id,department,category,status,requested_by,notes,sla_policy_id) VALUES($1,$2,$3,'unassigned',$4,$5,$6) RETURNING *`,[found.station.id,department,normalizedCategory,requestedBy||'Operador de estación',cleanNotes||null,sla?.id||null]);
+  const q=await pool.query(`INSERT INTO support_requests(station_id,department,category,status,requested_by,notes,sla_policy_id) VALUES($1,$2,$3,'unassigned',$4,$5,$6) RETURNING *`,[found.station.id,department,normalizedCategory,requestedBy||'Operador de estaciÃ³n',cleanNotes||null,sla?.id||null]);
   io.emit('request:changed',{action:'created',id:q.rows[0].id,stationCode:found.station.code,department,category:normalizedCategory});
   res.status(201).json({...q.rows[0],category_label:valid.label,category_icon:valid.icon});
 });
@@ -206,22 +269,22 @@ app.get('/api/dashboard',requireAuth,async(req,res)=>{
   const groups=await pool.query(`SELECT id,code,name,sort_order,enabled FROM production_groups WHERE enabled=TRUE AND archived_at IS NULL ORDER BY sort_order,name`);
   const stations=await pool.query(`SELECT s.id,s.code,s.label,s.enabled,s.group_id,s.station_no,g.name group_name,g.code group_code FROM stations s LEFT JOIN production_groups g ON g.id=s.group_id WHERE s.enabled=TRUE AND s.archived_at IS NULL AND COALESCE(g.enabled,TRUE)=TRUE ORDER BY g.sort_order,s.station_no,s.code`);
   const open=await pool.query(`
-    SELECT r.*,s.code,s.label station_name,s.group_id,g.name group_name,g.code group_code,c.label category_label,c.icon category_icon,
+    SELECT r.*,s.code,s.label station_name,s.group_id,g.name group_name,g.code group_code,COALESCE(ac.label,c.label,r.category) category_label,c.icon category_icon,
            t.id ticket_id,t.ticket_number,t.status ticket_status,t.assigned_to,u.full_name assigned_to_name,
            COALESCE(t.response_due_at, r.requested_at + make_interval(mins=>COALESCE(sp.response_minutes,5))) response_due_at,
            COALESCE(t.resolution_due_at, r.requested_at + make_interval(mins=>COALESCE(sp.resolution_minutes,60))) resolution_due_at,
            t.auto_close_at,sp.response_minutes,sp.resolution_minutes,sp.name sla_name
-    FROM support_requests r JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
-    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+    FROM support_requests r LEFT JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
+    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
     LEFT JOIN sla_policies sp ON sp.id=r.sla_policy_id
     LEFT JOIN tickets t ON t.request_id=r.id LEFT JOIN users u ON u.id=t.assigned_to
     WHERE r.status IN ('unassigned','assigned','in_progress','waiting','escalated','resolved') ${deptCond}
     ORDER BY r.requested_at`,params);
   const recent=await pool.query(`
     SELECT r.id,r.department,r.category,r.status,r.requested_at,r.resolved_at,r.closed_at,r.notes,s.code,s.label station_name,g.name group_name,
-           c.label category_label,t.ticket_number,t.status ticket_status,u.full_name assigned_to_name
-    FROM support_requests r JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
-    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN tickets t ON t.request_id=r.id LEFT JOIN users u ON u.id=t.assigned_to
+           COALESCE(ac.label,c.label,r.category) category_label,t.ticket_number,t.status ticket_status,u.full_name assigned_to_name
+    FROM support_requests r LEFT JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
+    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category LEFT JOIN tickets t ON t.request_id=r.id LEFT JOIN users u ON u.id=t.assigned_to
     WHERE 1=1 ${deptCond} ORDER BY r.requested_at DESC LIMIT 25`,params);
   const today=(await pool.query(`SELECT COUNT(*)::int count FROM support_requests r WHERE r.closed_at::date=CURRENT_DATE ${deptCond}`,params)).rows[0].count;
   const slaBreached=(await pool.query(`
@@ -244,13 +307,13 @@ app.get('/api/requests-list',requireAuth,async(req,res)=>{
   const dept=userDepartment(user);
   const params=dept?[dept]:[];
   const whereDept=dept?`AND r.department=$1`:'';
-  // Solicitudes = sólo pool SIN ASIGNAR.
+  // Solicitudes = sÃ³lo pool SIN ASIGNAR.
   const {rows}=await pool.query(`
-    SELECT r.*,s.code,s.label station_name,g.name group_name,g.code group_code,c.label category_label,c.icon category_icon,
+    SELECT r.*,s.code,s.label station_name,g.name group_name,g.code group_code,COALESCE(ac.label,c.label,r.category) category_label,c.icon category_icon,
            sp.name sla_name,COALESCE(sp.response_minutes,5) response_minutes,COALESCE(sp.resolution_minutes,60) resolution_minutes,
            r.requested_at + make_interval(mins=>COALESCE(sp.response_minutes,5)) response_due_at
-    FROM support_requests r JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
-    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN sla_policies sp ON sp.id=r.sla_policy_id
+    FROM support_requests r LEFT JOIN stations s ON s.id=r.station_id LEFT JOIN production_groups g ON g.id=s.group_id
+    LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category LEFT JOIN sla_policies sp ON sp.id=r.sla_policy_id
     WHERE r.status='unassigned' ${whereDept} ORDER BY r.requested_at ASC`,params);
   res.json(rows);
 });
@@ -261,16 +324,16 @@ app.post('/api/requests/:id/assign',requireAuth,async(req,res)=>{
     await client.query('BEGIN');
 
     const check=(await client.query(`
-      SELECT r.*,s.code station_code,s.label station_name,g.name group_name,c.label category_label
+      SELECT r.*,COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,COALESCE(g.name,r.requester_area,'Administrativo') group_name,COALESCE(ac.label,c.label,r.category) category_label
       FROM support_requests r
-      JOIN stations s ON s.id=r.station_id
+      LEFT JOIN stations s ON s.id=r.station_id
       LEFT JOIN production_groups g ON g.id=s.group_id
-      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
       WHERE r.id=$1
       FOR UPDATE OF r`,[req.params.id])).rows[0];
 
     if(!check){await client.query('ROLLBACK');return res.status(404).json({error:'Solicitud no encontrada'});}
-    if(!canAct(req.session.user,check.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta área'});}
+    if(!canAct(req.session.user,check.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta Ã¡rea'});}
     if(check.status!=='unassigned'){await client.query('ROLLBACK');return res.status(409).json({error:'La solicitud ya fue asignada'});}
 
     const sla=check.sla_policy_id
@@ -361,7 +424,7 @@ app.get('/api/tickets/:id/events',requireAuth,async(req,res)=>{
 app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
   const desired=String(req.body.status||'').trim();
   const allowed=['assigned','in_progress','waiting','escalated','resolved','closed'];
-  if(!allowed.includes(desired))return res.status(400).json({error:'Estado inválido'});
+  if(!allowed.includes(desired))return res.status(400).json({error:'Estado invÃ¡lido'});
 
   const client=await pool.connect();
   try{
@@ -373,14 +436,14 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
              COALESCE(sp.pause_on_waiting,TRUE) pause_on_waiting
       FROM tickets t
       JOIN support_requests r ON r.id=t.request_id
-      JOIN stations s ON s.id=r.station_id
+      LEFT JOIN stations s ON s.id=r.station_id
       LEFT JOIN sla_policies sp ON sp.id=t.sla_policy_id
       WHERE t.id=$1
       FOR UPDATE OF t`,[req.params.id])).rows[0];
 
     if(!t){await client.query('ROLLBACK');return res.status(404).json({error:'Ticket no encontrado'});}
-    if(!canAct(req.session.user,t.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta área'});}
-    if(['closed','cancelled'].includes(t.status)){await client.query('ROLLBACK');return res.status(409).json({error:'El ticket ya está cerrado'});}
+    if(!canAct(req.session.user,t.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta Ã¡rea'});}
+    if(['closed','cancelled'].includes(t.status)){await client.query('ROLLBACK');return res.status(409).json({error:'El ticket ya estÃ¡ cerrado'});}
 
     const transitions={
       assigned:['in_progress','waiting','escalated','resolved'],
@@ -391,10 +454,10 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
     };
     if(!(transitions[t.status]||[]).includes(desired)){
       await client.query('ROLLBACK');
-      return res.status(409).json({error:`Transición no permitida: ${ticketStateLabel(t.status)} → ${ticketStateLabel(desired)}`});
+      return res.status(409).json({error:`TransiciÃ³n no permitida: ${ticketStateLabel(t.status)} â†’ ${ticketStateLabel(desired)}`});
     }
     if(desired==='closed'&&!isManager(req.session.user)){
-      await client.query('ROLLBACK');return res.status(403).json({error:'Sólo Admin/Superadmin puede cerrar manualmente'});
+      await client.query('ROLLBACK');return res.status(403).json({error:'SÃ³lo Admin/Superadmin puede cerrar manualmente'});
     }
 
     const textReason=String(req.body.reason||'').trim();
@@ -403,8 +466,8 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
 
     if(desired==='waiting'&&!textReason){await client.query('ROLLBACK');return res.status(400).json({error:'Indica el motivo de espera'});}
     if(desired==='escalated'&&!textReason){await client.query('ROLLBACK');return res.status(400).json({error:'Indica el motivo del escalamiento'});}
-    if(desired==='resolved'&&!solution){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la solución aplicada'});}
-    if(desired==='closed'&&!closureComment){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la solución/comentario final de cierre'});}
+    if(desired==='resolved'&&!solution){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la soluciÃ³n aplicada'});}
+    if(desired==='closed'&&!closureComment){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la soluciÃ³n/comentario final de cierre'});}
 
     let totalWait=Number(t.total_wait_seconds||0);
     let resolutionDue=t.resolution_due_at ? new Date(t.resolution_due_at) : null;
@@ -497,7 +560,7 @@ app.get('/api/history',requireAuth,async(req,res)=>{
 });
 
 // ============================================================
-// REPORTES DINÁMICOS
+// REPORTES DINÃMICOS
 // ============================================================
 app.get('/api/report-filters',requireAuth,async(req,res)=>{
   const dept=userDepartment(req.session.user);
@@ -583,7 +646,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
         s.label station_name,
         s.group_id,
         COALESCE(g.name,'Sin grupo') group_name,
-        COALESCE(c.label,r.category,'Sin categoría') category_label,
+        COALESCE(c.label,r.category,'Sin categorÃ­a') category_label,
         t.id ticket_id,
         t.ticket_number,
         t.status ticket_status,
@@ -599,9 +662,9 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
         sp.response_minutes,
         sp.resolution_minutes
       FROM support_requests r
-      JOIN stations s ON s.id=r.station_id
+      LEFT JOIN stations s ON s.id=r.station_id
       LEFT JOIN production_groups g ON g.id=s.group_id
-      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
       LEFT JOIN tickets t ON t.request_id=r.id
       LEFT JOIN users u ON u.id=t.assigned_to
       LEFT JOIN sla_policies sp ON sp.id=COALESCE(t.sla_policy_id,r.sla_policy_id)
@@ -684,7 +747,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
     for(const x of rows){
       const met=resolutionMet(x);
       if(met===null)continue;
-      const k=x.category_label||'Sin categoría';
+      const k=x.category_label||'Sin categorÃ­a';
       if(!categoryMap.has(k))categoryMap.set(k,{label:k,measured:0,met:0});
       const o=categoryMap.get(k);
       o.measured++;
@@ -733,11 +796,11 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
       const o=stationMap.get(k);
       o.total++;
       const z=resolutionSeconds(x); if(z!==null)o.resolutions.push(z);
-      const c=x.category_label||'Sin categoría';
+      const c=x.category_label||'Sin categorÃ­a';
       o.cats.set(c,(o.cats.get(c)||0)+1);
     }
     const recurrent=[...stationMap.values()].map(o=>{
-      const principal=[...o.cats.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+      const principal=[...o.cats.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||'â€”';
       return {label:o.label,station_name:o.station_name,group_name:o.group_name,total:o.total,
         principal_incident:principal,avg_resolution_seconds:avg(o.resolutions)};
     }).sort((a,b)=>b.total-a.total).slice(0,5);
@@ -767,7 +830,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
 });
 
 // ============================================================
-// ADMIN: GRUPOS / EQUIPOS CON CÓDIGO AUTOMÁTICO
+// ADMIN: GRUPOS / EQUIPOS CON CÃ“DIGO AUTOMÃTICO
 // ============================================================
 app.get('/api/admin/groups',requireManager,async(req,res)=>{
   const groups=await pool.query(`SELECT * FROM production_groups WHERE archived_at IS NULL ORDER BY sort_order,name`);
@@ -777,12 +840,12 @@ app.get('/api/admin/groups',requireManager,async(req,res)=>{
 
 app.post('/api/admin/groups',requireManager,async(req,res)=>{
   const name=String(req.body.name||'').trim(); if(!name)return res.status(400).json({error:'Nombre requerido'});
-  const code=slug(name); if(!code)return res.status(400).json({error:'No se pudo generar código'});
+  const code=slug(name); if(!code)return res.status(400).json({error:'No se pudo generar cÃ³digo'});
   try{
     const n=(await pool.query(`SELECT COALESCE(MAX(legacy_line_no),0)+1 n FROM production_groups`)).rows[0].n;
     const q=(await pool.query(`INSERT INTO production_groups(code,name,sort_order,legacy_line_no) VALUES($1,$2,$3,$4) RETURNING *`,[code,name,n*10,n])).rows[0];
     io.emit('data:changed',{type:'groups'});res.status(201).json(q);
-  }catch(e){if(e.code==='23505')return res.status(409).json({error:'Ya existe un grupo con ese nombre/código'});throw e;}
+  }catch(e){if(e.code==='23505')return res.status(409).json({error:'Ya existe un grupo con ese nombre/cÃ³digo'});throw e;}
 });
 
 app.patch('/api/admin/groups/:id',requireManager,async(req,res)=>{
@@ -792,7 +855,7 @@ app.patch('/api/admin/groups/:id',requireManager,async(req,res)=>{
     const g=(await client.query(`SELECT * FROM production_groups WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];
     if(!g){await client.query('ROLLBACK');return res.status(404).json({error:'Grupo no encontrado'});}
     const newName=String(req.body.name||g.name).trim(); const newCode=slug(newName); const enabled=req.body.enabled;
-    if(!newName||!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de grupo inválido'});}
+    if(!newName||!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de grupo invÃ¡lido'});}
     if(newName!==g.name || newCode!==g.code){
       const sts=(await client.query(`SELECT * FROM stations WHERE group_id=$1 AND archived_at IS NULL FOR UPDATE`,[g.id])).rows;
       for(const st of sts){
@@ -806,7 +869,7 @@ app.patch('/api/admin/groups/:id',requireManager,async(req,res)=>{
     }
     const q=(await client.query(`UPDATE production_groups SET name=$1,code=$2,enabled=COALESCE($3,enabled),updated_at=NOW() WHERE id=$4 RETURNING *`,[newName,newCode,enabled,g.id])).rows[0];
     await client.query('COMMIT');io.emit('data:changed',{type:'groups'});res.json(q);
-  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return res.status(409).json({error:'El nuevo nombre genera un código duplicado'});console.error(e);res.status(500).json({error:'No se pudo renombrar grupo/equipos'});}finally{client.release();}
+  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return res.status(409).json({error:'El nuevo nombre genera un cÃ³digo duplicado'});console.error(e);res.status(500).json({error:'No se pudo renombrar grupo/equipos'});}finally{client.release();}
 });
 
 app.delete('/api/admin/groups/:id',requireManager,async(req,res)=>{
@@ -818,7 +881,7 @@ app.delete('/api/admin/groups/:id',requireManager,async(req,res)=>{
 app.post('/api/admin/stations',requireManager,async(req,res)=>{
   const groupId=Number(req.body.groupId); const name=String(req.body.name||'').trim(); if(!groupId||!name)return res.status(400).json({error:'Grupo y nombre son requeridos'});
   const g=(await pool.query(`SELECT * FROM production_groups WHERE id=$1 AND archived_at IS NULL`,[groupId])).rows[0]; if(!g)return res.status(404).json({error:'Grupo no encontrado'});
-  const code=stationCodeFromNames(g.name,name); if(!code)return res.status(400).json({error:'Nombre de equipo inválido'});
+  const code=stationCodeFromNames(g.name,name); if(!code)return res.status(400).json({error:'Nombre de equipo invÃ¡lido'});
   const next=(await pool.query(`SELECT COALESCE(MAX(station_no),0)+1 n FROM stations WHERE group_id=$1`,[groupId])).rows[0].n;
   try{const q=(await pool.query(`INSERT INTO stations(code,line_no,station_no,label,group_id,enabled) VALUES($1,$2,$3,$4,$5,TRUE) RETURNING *`,[code,g.legacy_line_no,next,name,groupId])).rows[0];io.emit('data:changed',{type:'stations'});res.status(201).json(q);}catch(e){if(e.code==='23505')return res.status(409).json({error:`Ya existe ${code}. Usa otro nombre.`});throw e;}
 });
@@ -831,7 +894,7 @@ app.patch('/api/admin/stations/:id',requireManager,async(req,res)=>{
     const groupId=Number(req.body.groupId||s.group_id); const g=(await client.query(`SELECT * FROM production_groups WHERE id=$1 AND archived_at IS NULL`,[groupId])).rows[0]; if(!g){await client.query('ROLLBACK');return res.status(404).json({error:'Grupo no encontrado'});}
     const name=String(req.body.name||s.label).trim(); if(!name){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo requerido'});}
     const newCode=stationCodeFromNames(g.name,name); const enabled=req.body.enabled;
-    if(!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo inválido'});}
+    if(!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo invÃ¡lido'});}
     if(newCode!==s.code) await client.query(`INSERT INTO station_aliases(station_id,old_code) VALUES($1,$2) ON CONFLICT(old_code) DO NOTHING`,[s.id,s.code]);
     const q=(await client.query(`UPDATE stations SET label=$1,code=$2,group_id=$3,line_no=$4,enabled=COALESCE($5,enabled),updated_at=NOW() WHERE id=$6 RETURNING *`,[name,newCode,groupId,g.legacy_line_no,enabled,s.id])).rows[0];
     await client.query('COMMIT');io.emit('data:changed',{type:'stations',stationCode:q.code});res.json(q);
@@ -847,10 +910,10 @@ app.get('/api/admin/users',requireManager,async(req,res)=>{
 });
 app.post('/api/admin/users',requireManager,async(req,res)=>{
   const username=String(req.body.username||'').trim();const fullName=String(req.body.fullName||'').trim();const role=String(req.body.role||'engineer');const department=role==='engineer'?String(req.body.department||''):null;const password=String(req.body.password||'');
-  if(!username||!fullName||password.length<6)return res.status(400).json({error:'Usuario, nombre y contraseña (mín. 6) requeridos'});
-  if(!['admin','engineer','superadmin'].includes(role))return res.status(400).json({error:'Rol inválido'});
-  if(role==='superadmin' && req.session.user.role!=='superadmin')return res.status(403).json({error:'Sólo Superadmin puede crear otro Superadmin'});
-  if(role==='engineer'&&!['systems','maintenance'].includes(department))return res.status(400).json({error:'Selecciona área del ingeniero'});
+  if(!username||!fullName||password.length<6)return res.status(400).json({error:'Usuario, nombre y contraseÃ±a (mÃ­n. 6) requeridos'});
+  if(!['admin','engineer','superadmin'].includes(role))return res.status(400).json({error:'Rol invÃ¡lido'});
+  if(role==='superadmin' && req.session.user.role!=='superadmin')return res.status(403).json({error:'SÃ³lo Superadmin puede crear otro Superadmin'});
+  if(role==='engineer'&&!['systems','maintenance'].includes(department))return res.status(400).json({error:'Selecciona Ã¡rea del ingeniero'});
   try{const hash=await bcrypt.hash(password,10);const q=(await pool.query(`INSERT INTO users(username,password_hash,full_name,role,department,active) VALUES($1,$2,$3,$4,$5,TRUE) RETURNING id,username,full_name,role,department,active`,[username,hash,fullName,role,department])).rows[0];res.status(201).json(q);}catch(e){if(e.code==='23505')return res.status(409).json({error:'Usuario duplicado'});throw e;}
 });
 app.patch('/api/admin/users/:id',requireManager,async(req,res)=>{
@@ -863,19 +926,19 @@ app.patch('/api/admin/users/:id',requireManager,async(req,res)=>{
 app.post('/api/admin/users/:id/reset-password',requireManager,async(req,res)=>{
   const target=(await pool.query(`SELECT * FROM users WHERE id=$1 AND deleted_at IS NULL`,[req.params.id])).rows[0];if(!target)return res.status(404).json({error:'Usuario no encontrado'});
   if(target.role==='superadmin'&&req.session.user.role!=='superadmin')return res.status(403).json({error:'Admin no puede restablecer al Superadmin'});
-  const password=String(req.body.password||'');if(password.length<6)return res.status(400).json({error:'Contraseña mínimo 6 caracteres'});const hash=await bcrypt.hash(password,10);await pool.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2`,[hash,target.id]);res.json({ok:true});
+  const password=String(req.body.password||'');if(password.length<6)return res.status(400).json({error:'ContraseÃ±a mÃ­nimo 6 caracteres'});const hash=await bcrypt.hash(password,10);await pool.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2`,[hash,target.id]);res.json({ok:true});
 });
 app.delete('/api/admin/users/:id',requireManager,async(req,res)=>{
   const target=(await pool.query(`SELECT * FROM users WHERE id=$1 AND deleted_at IS NULL`,[req.params.id])).rows[0];if(!target)return res.status(404).json({error:'Usuario no encontrado'});
   if(target.role==='superadmin')return res.status(403).json({error:'El usuario Superadmin no se puede eliminar'});
-  if(Number(target.id)===Number(req.session.user.id))return res.status(409).json({error:'No puedes eliminar tu propia sesión'});
+  if(Number(target.id)===Number(req.session.user.id))return res.status(409).json({error:'No puedes eliminar tu propia sesiÃ³n'});
   await pool.query(`UPDATE users SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE id=$1`,[target.id]);res.json({ok:true});
 });
 
 // ============================================================
 // ADMIN: SLA
 // ============================================================
-app.get('/api/admin/slas',requireManager,async(req,res)=>{const {rows}=await pool.query(`SELECT s.*,c.label category_label,g.name group_name,st.code station_code,st.label station_name FROM sla_policies s LEFT JOIN support_categories c ON c.department=s.department AND c.code=s.category LEFT JOIN production_groups g ON g.id=s.group_id LEFT JOIN stations st ON st.id=s.station_id ORDER BY s.enabled DESC,s.priority,s.name`);res.json(rows);});
+app.get('/api/admin/slas',requireManager,async(req,res)=>{const {rows}=await pool.query(`SELECT s.*,COALESCE(ac.label,c.label,r.category) category_label,g.name group_name,st.code station_code,st.label station_name FROM sla_policies s LEFT JOIN support_categories c ON c.department=s.department AND c.code=s.category LEFT JOIN production_groups g ON g.id=s.group_id LEFT JOIN stations st ON st.id=s.station_id ORDER BY s.enabled DESC,s.priority,s.name`);res.json(rows);});
 app.post('/api/admin/slas',requireManager,async(req,res)=>{
   const body=req.body;const name=String(body.name||'').trim();if(!name)return res.status(400).json({error:'Nombre requerido'});
   const department=['systems','maintenance'].includes(body.department)?body.department:null;const category=String(body.category||'').trim()||null;const groupId=Number(body.groupId||0)||null;const stationId=Number(body.stationId||0)||null;
@@ -890,7 +953,7 @@ app.delete('/api/admin/slas/:id',requireManager,async(req,res)=>{
     await client.query('BEGIN');
     const found=(await client.query(`SELECT id,name FROM sla_policies WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];
     if(!found){await client.query('ROLLBACK');return res.status(404).json({error:'Regla SLA no encontrada'});}
-    // Conservar históricos: tickets/solicitudes mantienen sus timestamps SLA, sólo se desprenden de la regla eliminada.
+    // Conservar histÃ³ricos: tickets/solicitudes mantienen sus timestamps SLA, sÃ³lo se desprenden de la regla eliminada.
     await client.query(`UPDATE tickets SET sla_policy_id=NULL WHERE sla_policy_id=$1`,[req.params.id]);
     await client.query(`UPDATE support_requests SET sla_policy_id=NULL WHERE sla_policy_id=$1`,[req.params.id]);
     await client.query(`DELETE FROM sla_policies WHERE id=$1`,[req.params.id]);
@@ -900,20 +963,20 @@ app.delete('/api/admin/slas/:id',requireManager,async(req,res)=>{
 });
 
 // ============================================================
-// AUTOCIERRE: RESUELTO -> CERRADO después del SLA configurado
+// AUTOCIERRE: RESUELTO -> CERRADO despuÃ©s del SLA configurado
 // ============================================================
 async function autoCloseResolved(){
   const client=await pool.connect();
   try{
-    const due=(await client.query(`SELECT t.id,t.request_id,t.department,s.code station_code FROM tickets t JOIN support_requests r ON r.id=t.request_id JOIN stations s ON s.id=r.station_id WHERE t.status='resolved' AND t.auto_close_at IS NOT NULL AND t.auto_close_at<=NOW() ORDER BY t.auto_close_at LIMIT 100`)).rows;
+    const due=(await client.query(`SELECT t.id,t.request_id,t.department,s.code station_code FROM tickets t JOIN support_requests r ON r.id=t.request_id LEFT JOIN stations s ON s.id=r.station_id WHERE t.status='resolved' AND t.auto_close_at IS NOT NULL AND t.auto_close_at<=NOW() ORDER BY t.auto_close_at LIMIT 100`)).rows;
     for(const t of due){
       await client.query('BEGIN');
       const q=await client.query(`UPDATE tickets SET status='closed',closed_at=NOW(),closure_type='auto',
-        closure_notes=COALESCE(NULLIF(closure_notes,''),resolution_notes,'Cierre automático después de la ventana de validación'),
+        closure_notes=COALESCE(NULLIF(closure_notes,''),resolution_notes,'Cierre automÃ¡tico despuÃ©s de la ventana de validaciÃ³n'),
         updated_at=NOW() WHERE id=$1 AND status='resolved' RETURNING id`,[t.id]);
       if(q.rowCount){
         await client.query(`UPDATE support_requests SET status='closed',closed_at=NOW(),updated_at=NOW() WHERE id=$1`,[t.request_id]);
-        await logTicketEvent(client,t.id,'auto_closed','resolved','closed',null,'Cierre automático por ventana de validación SLA');
+        await logTicketEvent(client,t.id,'auto_closed','resolved','closed',null,'Cierre automÃ¡tico por ventana de validaciÃ³n SLA');
       }
       await client.query('COMMIT');
       if(q.rowCount){io.emit('ticket:changed',{action:'closed',ticketId:t.id,status:'closed',stationCode:t.station_code,department:t.department});io.emit('request:changed',{action:'closed',id:t.request_id,stationCode:t.station_code,department:t.department});}
@@ -929,7 +992,8 @@ io.on('connection',socket=>{
 });
 
 server.listen(PORT,HOST,()=>{
-  console.log(`Andon Support R10 ejecutándose en http://localhost:${PORT}`);
+  console.log(`Andon Support R10 ejecutÃ¡ndose en http://localhost:${PORT}`);
   console.log(`Cliente: http://localhost:${PORT}/station/L1-E1`);
   console.log(`Dashboard: http://localhost:${PORT}/login`);
 });
+

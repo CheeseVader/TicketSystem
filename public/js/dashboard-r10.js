@@ -1,4 +1,4 @@
-console.log('ANDON_R10_8_6_DASHBOARD');
+﻿console.log('ANDON_R10_8_6_DASHBOARD');
 const socket=io();
 const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -48,6 +48,285 @@ function responseSlaCell(row){
 function toast(msg,type='info'){const t=$('#toast');t.textContent=msg;t.className=`toast show ${type}`;clearTimeout(t._tm);t._tm=setTimeout(()=>t.className='toast',3500)}
 async function api(url,opt={}){const r=await fetch(url,{...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})},cache:'no-store'});let d={};try{d=await r.json()}catch{}if(r.status===401){location='/login';throw new Error('Sesión expirada')}if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
 
+
+// ================= ANDON_AUDIO_R1_BEGIN =================
+const ANDON_AUDIO_KEY='andon_audio_enabled_v1';
+const ANDON_AUDIO_REPEAT_MS=45000;
+
+let andonAudioEnabled=localStorage.getItem(ANDON_AUDIO_KEY)!=='0';
+let andonAudioUnlocked=false;
+let andonAudioContext=null;
+let andonSpeechQueue=[];
+let andonSpeaking=false;
+let andonPendingRequests=new Map();
+let andonLastAlertAt=new Map();
+
+function andonGetAudioContext(){
+  if(!andonAudioContext){
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx)return null;
+    andonAudioContext=new Ctx();
+  }
+  return andonAudioContext;
+}
+
+async function andonUnlockAudio(showMessage=true){
+  if(!andonAudioEnabled)return false;
+  try{
+    const ctx=andonGetAudioContext();
+    if(ctx&&ctx.state==='suspended')await ctx.resume();
+    andonAudioUnlocked=!ctx||ctx.state==='running';
+    if(window.speechSynthesis)window.speechSynthesis.getVoices();
+    andonUpdateAudioButton();
+    if(showMessage&&andonAudioUnlocked)toast('Alertas de audio listas','success');
+    return andonAudioUnlocked;
+  }catch(e){
+    console.warn('ANDON audio unlock:',e);
+    andonAudioUnlocked=false;
+    andonUpdateAudioButton();
+    return false;
+  }
+}
+
+function andonUpdateAudioButton(){
+  const btn=document.getElementById('andonAudioToggle');
+  const icon=document.getElementById('andonAudioIcon');
+  const label=document.getElementById('andonAudioLabel');
+  if(!btn||!icon||!label)return;
+
+  btn.classList.toggle('audio-off',!andonAudioEnabled);
+  btn.classList.toggle('audio-locked',andonAudioEnabled&&!andonAudioUnlocked);
+
+  if(!andonAudioEnabled){
+    icon.textContent='🔇';
+    label.textContent='Alertas desactivadas';
+  }else if(!andonAudioUnlocked){
+    icon.textContent='🔊';
+    label.textContent='Activar audio';
+  }else{
+    icon.textContent='🔊';
+    label.textContent='Alertas activadas';
+  }
+}
+
+function andonSetAudioEnabled(enabled){
+  andonAudioEnabled=Boolean(enabled);
+  localStorage.setItem(ANDON_AUDIO_KEY,andonAudioEnabled?'1':'0');
+  if(!andonAudioEnabled){
+    andonSpeechQueue.length=0;
+    andonSpeaking=false;
+    if(window.speechSynthesis)window.speechSynthesis.cancel();
+  }
+  andonUpdateAudioButton();
+}
+
+function andonTone(freq,start,duration,volume=.12,type='sine'){
+  const ctx=andonGetAudioContext();
+  if(!ctx||ctx.state!=='running')return;
+  const osc=ctx.createOscillator();
+  const gain=ctx.createGain();
+  osc.type=type;
+  osc.frequency.setValueAtTime(freq,ctx.currentTime+start);
+  gain.gain.setValueAtTime(.0001,ctx.currentTime+start);
+  gain.gain.exponentialRampToValueAtTime(volume,ctx.currentTime+start+.015);
+  gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+start+duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime+start);
+  osc.stop(ctx.currentTime+start+duration+.03);
+}
+
+function andonPlaySystemsAlarm(){
+  andonTone(660,0,.16,.14,'sine');
+  andonTone(880,.20,.16,.14,'sine');
+  andonTone(1100,.40,.22,.14,'sine');
+}
+
+function andonPlayMaintenanceAlarm(){
+  andonTone(420,0,.22,.12,'square');
+  andonTone(420,.30,.22,.12,'square');
+  andonTone(560,.60,.28,.11,'square');
+}
+
+function andonDepartmentName(department){
+  return department==='systems'?'Sistemas':department==='maintenance'?'Mantenimiento':String(department||'Soporte');
+}
+
+function andonReadableStation(code){
+  const value=String(code||'').trim();
+  let m=value.match(/^L(\d+)-E(\d+)$/i);
+  if(m)return `Línea ${m[1]}, estación ${m[2]}`;
+  m=value.match(/^V(\d+)-(.+)$/i);
+  if(m)return `Grupo V ${m[1]}, equipo ${m[2].replace(/[-_]+/g,' ')}`;
+  return value?`Equipo ${value.replace(/[-_]+/g,' ')}`:'Equipo no identificado';
+}
+
+function andonReadableCategory(value){
+  return String(value||'').replace(/[-_]+/g,' ').trim();
+}
+
+function andonSpeak(text){
+  if(!andonAudioEnabled||!andonAudioUnlocked||!window.speechSynthesis||!text)return;
+  andonSpeechQueue.push(text);
+  andonProcessSpeechQueue();
+}
+
+function andonProcessSpeechQueue(){
+  if(andonSpeaking||!andonSpeechQueue.length||!andonAudioEnabled)return;
+  const text=andonSpeechQueue.shift();
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='es-US';
+  u.rate=1.30;
+  u.pitch=1.05;
+  u.volume=1;
+  const voices=window.speechSynthesis.getVoices();
+  u.voice=voices.find(v=>v.name==='Google español de Estados Unidos') ||
+          voices.find(v=>String(v.lang||'').toLowerCase()==='es-us') ||
+          voices.find(v=>String(v.lang||'').toLowerCase().startsWith('es')) ||
+          null;
+  andonSpeaking=true;
+  u.onend=()=>{andonSpeaking=false;setTimeout(andonProcessSpeechQueue,180)};
+  u.onerror=()=>{andonSpeaking=false;setTimeout(andonProcessSpeechQueue,180)};
+  window.speechSynthesis.speak(u);
+}
+
+function andonAlertRequest(request,repeat=false){
+  if(!request||!andonAudioEnabled||!andonAudioUnlocked)return;
+  if(request.department==='maintenance')andonPlayMaintenanceAlarm();
+  else andonPlaySystemsAlarm();
+
+  const area=andonDepartmentName(request.department);
+  const category=andonReadableCategory(request.category_label||request.category);
+  const prefix=repeat?'Recordatorio. Solicitud pendiente de':'Atención. Nueva solicitud de';
+  let phrase;
+  if(request.source==='administrative'){
+    const requester=String(request.requesterArea||'').trim();
+    const location=String(request.supportLocation||request.stationCode||'').trim();
+    phrase=`${prefix} ${area}. Solicitud administrativa`;
+    if(requester)phrase+=` de ${requester}`;
+    if(location)phrase+=`. Ubicación ${location}`;
+    phrase+='.';
+  }else{
+    const station=andonReadableStation(request.stationCode||request.station_code||request.code);
+    phrase=`${prefix} ${area}. ${station}.`;
+  }
+  if(category)phrase+=` Categoría ${category}.`;
+  setTimeout(()=>andonSpeak(phrase),950);
+}
+
+function andonSyncPendingRequests(rows){
+  const current=new Map();
+  (rows||[]).filter(row=>row.status==='unassigned').forEach(row=>{
+    const id=Number(row.id);
+    if(!id)return;
+    const item={
+      id,
+      department:row.department,
+      stationCode:row.stationCode||row.station_code||row.code,
+      category:row.category,
+      category_label:row.category_label
+    };
+    current.set(id,item);
+    if(!andonPendingRequests.has(id)){
+      andonPendingRequests.set(id,item);
+      // Al abrir el dashboard no anunciar solicitudes que ya estaban pendientes.
+      if(!andonLastAlertAt.has(id))andonLastAlertAt.set(id,Date.now());
+    }
+  });
+
+  [...andonPendingRequests.keys()].forEach(id=>{
+    if(!current.has(id)){
+      andonPendingRequests.delete(id);
+      andonLastAlertAt.delete(id);
+    }
+  });
+}
+
+function andonHandleRequestEvent(evt){
+  if(!evt||!evt.id)return;
+
+  // Los ingenieros sólo reciben audio de su propia área.
+  if(me?.role==='engineer'&&me.department&&evt.department&&evt.department!==me.department)return;
+
+  const id=Number(evt.id);
+
+  if(evt.action==='created'){
+    const request={
+      id,
+      department:evt.department,
+      stationCode:evt.stationCode,
+      category:evt.category,
+      category_label:evt.category_label,
+      source:evt.source,
+      requesterArea:evt.requesterArea||evt.requester_area,
+      supportLocation:evt.supportLocation||evt.support_location
+    };
+    andonPendingRequests.set(id,request);
+    andonLastAlertAt.set(id,Date.now());
+    andonAlertRequest(request,false);
+    return;
+  }
+
+  if(['assigned','resolved','closed','cancelled'].includes(evt.action)){
+    andonPendingRequests.delete(id);
+    andonLastAlertAt.delete(id);
+  }
+}
+
+function andonCheckPendingAlerts(){
+  if(!andonAudioEnabled||!andonAudioUnlocked)return;
+  const now=Date.now();
+  andonPendingRequests.forEach((request,id)=>{
+    const last=andonLastAlertAt.get(id)||now;
+    if(now-last>=ANDON_AUDIO_REPEAT_MS){
+      andonLastAlertAt.set(id,now);
+      andonAlertRequest(request,true);
+    }
+  });
+}
+
+function andonInitAudio(){
+  andonUpdateAudioButton();
+  const btn=document.getElementById('andonAudioToggle');
+
+  if(btn){
+    btn.addEventListener('click',async()=>{
+      if(!andonAudioEnabled){
+        andonSetAudioEnabled(true);
+        await andonUnlockAudio(false);
+        if(andonAudioUnlocked){
+          andonPlaySystemsAlarm();
+          setTimeout(()=>andonSpeak('Alertas de audio activadas.'),700);
+        }
+        return;
+      }
+
+      if(!andonAudioUnlocked){
+        await andonUnlockAudio(false);
+        if(andonAudioUnlocked){
+          andonPlaySystemsAlarm();
+          setTimeout(()=>andonSpeak('Alertas de audio activadas.'),700);
+        }
+        return;
+      }
+
+      andonSetAudioEnabled(false);
+      toast('Alertas de audio desactivadas','info');
+    });
+  }
+
+  const unlock=()=>{
+    if(andonAudioEnabled&&!andonAudioUnlocked)andonUnlockAudio(false);
+  };
+  document.addEventListener('pointerdown',unlock,{once:true});
+  document.addEventListener('keydown',unlock,{once:true});
+
+  setInterval(andonCheckPendingAlerts,5000);
+}
+
+document.addEventListener('DOMContentLoaded',andonInitAudio);
+// ================= ANDON_AUDIO_R1_END =================
+
 const viewMeta={dashboard:['Dashboard','Monitoreo en tiempo real'],requests:['Solicitudes','Pool pendiente y sin asignar'],tickets:['Tickets','Trabajo asignado y pendiente'],history:['Historial','Tickets cerrados'],reports:['Reportes','Análisis dinámico y SLA'],groups:['Grupos y Equipos','Estructura de producción'],users:['Usuarios','Roles y privilegios'],sla:['SLA','Políticas de respuesta, resolución y autocierre']};
 async function showView(name){
   if(me?.role==='engineer'&&['history','groups','users','sla'].includes(name))name='dashboard';
@@ -67,14 +346,18 @@ async function showView(name){
 $$('#sideNav a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();showView(a.dataset.view)}));
 $$('[data-go]').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.go)));
 
-function requestRows(rows,compact=false){return rows.length?rows.map(x=>`<tr><td>${esc(x.group_name||'—')}</td><td><strong>${esc(x.code)}</strong><small class="subline">${esc(x.station_name||'')}</small></td><td>${deptBadge(x.department)}</td><td>${esc(x.category_label||x.category||'')}</td><td>${esc(x.notes||'—')}</td>${compact?'':`<td>${fmtDate(x.requested_at)}</td>`}<td data-since="${x.requested_at}">${elapsed(x.requested_at)}</td><td>${responseSlaCell(x)}</td><td><button class="btn small attend" onclick="assignRequest(${x.id})">Asignarme</button></td></tr>`).join(''):`<tr><td colspan="${compact?8:9}" class="empty">No hay solicitudes sin asignar.</td></tr>`}
+function requestRows(rows,compact=false){return rows.length?rows.map(x=>`<tr><td>${esc(x.source==='administrative'?'ADMINISTRATIVOS':(x.group_name||'—'))}</td><td><strong>${esc(x.source==='administrative'?(x.requester_area||'Administrativo'):(x.code||''))}</strong><small class="subline">${esc(x.source==='administrative'?('Ubicación: '+(x.support_location||'—')):(x.station_name||''))}</small></td><td>${deptBadge(x.department)}</td><td>${esc(x.category_label||x.category||'')}</td><td>${esc(x.notes||'—')}</td>${compact?'':`<td>${fmtDate(x.requested_at)}</td>`}<td data-since="${x.requested_at}">${elapsed(x.requested_at)}</td><td>${responseSlaCell(x)}</td><td><button class="btn small attend" onclick="assignRequest(${x.id})">Asignarme</button></td></tr>`).join(''):`<tr><td colspan="${compact?8:9}" class="empty">No hay solicitudes sin asignar.</td></tr>`}
 
 async function loadDashboard(){
-  dashData=await api('/api/dashboard');me=dashData.user;renderIdentity();
-  const open=dashData.open||[];const unassigned=open.filter(x=>x.status==='unassigned');const tickets=open.filter(x=>x.status!=='unassigned');
+  dashData=await api('/api/dashboard');me=dashData.user;renderIdentity();try{const c=await api('/api/soporte/catalog');dashData.adminAreas=c.areas||[]}catch{dashData.adminAreas=[]}
+  const open=dashData.open||[];const unassigned=open.filter(x=>x.status==='unassigned');const tickets=open.filter(x=>x.status!=='unassigned');andonSyncPendingRequests(unassigned);
   $('#metricUnassigned').textContent=unassigned.length;$('#metricTickets').textContent=tickets.length;$('#metricBlocked').textContent=tickets.filter(x=>['waiting','escalated'].includes(x.ticket_status||x.status)).length;$('#metricSla').textContent=dashData.slaBreached||0;$('#metricClosedToday').textContent=dashData.closedToday||0;$('#metricStations').textContent=dashData.stations.length;
   const byStation={};open.forEach(x=>(byStation[x.code]??=[]).push(x));
-  $('#groupsGrid').innerHTML=dashData.groups.map(g=>{const sts=dashData.stations.filter(s=>s.group_id===g.id);return `<div class="line-card"><div class="line-title"><div><strong>${esc(g.name)}</strong><small>${esc(g.code)} · ${sts.length} equipos</small></div></div><div class="station-grid">${sts.map(s=>{const arr=byStation[s.code]||[];const state=arr.length?arr.map(x=>`${fmtDept(x.department)} · ${statusNames[x.ticket_status||x.status]||x.status}`).join(' / '):'OK';const cls=arr.some(x=>x.department==='systems')?'has-systems':arr.some(x=>x.department==='maintenance')?'has-maintenance':'';return `<div class="station-tile ${cls}"><span class="code">${esc(s.code)}</span><span class="station-name">${esc(s.label||'')}</span><span class="state">${esc(state)}</span></div>`}).join('')}</div></div>`}).join('');
+  const productionHtml=dashData.groups.map(g=>{const sts=dashData.stations.filter(s=>s.group_id===g.id);return `<div class="line-card"><div class="line-title"><div><strong>${esc(g.name)}</strong><small>${esc(g.code)} · ${sts.length} equipos</small></div></div><div class="station-grid">${sts.map(s=>{const arr=byStation[s.code]||[];const state=arr.length?arr.map(x=>`${fmtDept(x.department)} · ${statusNames[x.ticket_status||x.status]||x.status}`).join(' / '):'OK';const cls=arr.some(x=>x.department==='systems')?'has-systems':arr.some(x=>x.department==='maintenance')?'has-maintenance':'';return `<div class="station-tile ${cls}"><span class="code">${esc(s.code)}</span><span class="station-name">${esc(s.label||'')}</span><span class="state">${esc(state)}</span></div>`}).join('')}</div></div>`}).join('');
+  const adminOpen=open.filter(x=>x.source==='administrative');
+  const adminAreas=[...new Set([...(dashData.adminAreas||[]).map(x=>x.name),...adminOpen.map(x=>x.requester_area).filter(Boolean)])];
+  const adminHtml=adminAreas.length?`<div class="line-card"><div class="line-title"><div><strong>ADMINISTRATIVOS</strong><small>Áreas administrativas · ${adminAreas.length} áreas</small></div></div><div class="station-grid">${adminAreas.map(area=>{const arr=adminOpen.filter(x=>x.requester_area===area);const state=arr.length?arr.map(x=>`${fmtDept(x.department)} · ${statusNames[x.ticket_status||x.status]||x.status}`).join(' / '):'OK';const cls=arr.some(x=>x.department==='systems')?'has-systems':arr.some(x=>x.department==='maintenance')?'has-maintenance':'';return `<div class="station-tile ${cls}"><span class="code">${esc(area)}</span><span class="station-name">${arr.length?`Ubicación: ${esc(arr[0].support_location||area)}`:'Administrativo'}</span><span class="state">${esc(state)}</span></div>`}).join('')}</div></div>`:'';
+  $('#groupsGrid').innerHTML=productionHtml+adminHtml;
   $('#dashboardRequests').innerHTML=requestRows(unassigned,true);
   $('#recentList').innerHTML=(dashData.recent||[]).map(x=>`<div class="recent-item"><strong>${esc(x.code)} · ${fmtDept(x.department)} · ${esc(x.category_label||x.category||'')}</strong><small>${statusNames[x.ticket_status||x.status]||x.status} · ${fmtDate(x.requested_at)}${x.ticket_number?` · ${esc(x.ticket_number)}`:''}</small></div>`).join('')||'<div class="empty">Sin actividad.</div>';
 }
@@ -533,5 +816,10 @@ $('#exportReportPdf').addEventListener('click',()=>window.print());
 setInterval(()=>{if(location.hash==='#reports')loadReports(false).catch(()=>{})},300000);
 $('#refreshRequests').addEventListener('click',loadRequests);$('#refreshTickets').addEventListener('click',loadTickets);$('#refreshHistory').addEventListener('click',loadHistory);$('#ticketSearch').addEventListener('input',renderTickets);$('#mineOnly').addEventListener('change',loadTickets);$('#repDept').addEventListener('change',updateReportCategories);
 setInterval(()=>{$$('[data-since]').forEach(e=>e.textContent=elapsed(e.dataset.since));$$('[data-countdown]').forEach(e=>e.textContent=countdown(e.dataset.countdown))},1000);
-socket.on('request:changed',()=>refreshCurrent());socket.on('ticket:changed',()=>refreshCurrent());socket.on('data:changed',()=>refreshCurrent());socket.on('server:hello',info=>{if(!info?.bootId)return;const k='andon_r10_boot';const old=sessionStorage.getItem(k);sessionStorage.setItem(k,info.bootId);if(old&&old!==info.bootId){const u=new URL(location.href);u.searchParams.set('_reload',Date.now());location.replace(u)}});
+socket.on('request:changed',evt=>{
+  andonHandleRequestEvent(evt);
+  refreshCurrent();
+});socket.on('ticket:changed',()=>refreshCurrent());socket.on('data:changed',()=>refreshCurrent());socket.on('server:hello',info=>{if(!info?.bootId)return;const k='andon_r10_boot';const old=sessionStorage.getItem(k);sessionStorage.setItem(k,info.bootId);if(old&&old!==info.bootId){const u=new URL(location.href);u.searchParams.set('_reload',Date.now());location.replace(u)}});
 (async()=>{const m=await api('/api/me');if(!m.user)return location='/login';me=m.user;renderIdentity();await showView(location.hash.replace('#','')||'dashboard')})();
+
+

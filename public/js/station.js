@@ -1,4 +1,4 @@
-const socket = io();
+﻿const socket = io();
 
 let andonFirstConnect=true;
 function forceFreshReload(){const u=new URL(location.href);u.searchParams.set('_r10',Date.now());location.replace(u)}
@@ -152,6 +152,64 @@ function closeOther() {
   otherModal.classList.add('hidden');
 }
 
+function speakOperatorMessage(text) {
+  if (!window.speechSynthesis || !text) return;
+
+  const speak = () => {
+    const voices = window.speechSynthesis.getVoices();
+
+    if (!voices.length) return false;
+
+    const u = new SpeechSynthesisUtterance(text);
+
+    u.lang = 'es-US';
+    u.rate = 1.30;
+    u.pitch = 1.05;
+    u.volume = 1;
+
+    u.voice =
+      voices.find(v => v.name === 'Google español de Estados Unidos') ||
+      voices.find(v => String(v.lang || '').toLowerCase() === 'es-us') ||
+      voices.find(v => String(v.lang || '').toLowerCase().startsWith('es')) ||
+      voices[0] ||
+      null;
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+
+    return true;
+  };
+
+  if (speak()) return;
+
+  const onVoicesChanged = () => {
+    if (speak()) {
+      window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+    }
+  };
+
+  window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+
+  let attempts = 0;
+
+  const timer = setInterval(() => {
+    attempts++;
+
+    if (speak() || attempts >= 20) {
+      clearInterval(timer);
+      window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+    }
+  }, 250);
+}
+
+function speakOperatorConfirmation(department, label) {
+  const area = deptName(department);
+  const category = String(label || '').trim();
+
+  speakOperatorMessage(
+    `Solicitud de ${area} enviada. Categoría ${category}. Se atenderá enseguida.`
+  );
+}
 function showConfirmationPopup(department, label) {
   if (confirmationTimer) clearTimeout(confirmationTimer);
   confirmationTitle.textContent = 'Solicitud recibida';
@@ -200,6 +258,7 @@ async function sendRequest(department, category, notes = '') {
     renderTicket({ department, category, category_label: label, status: 'requested' });
     show('Solicitud activa. Se atenderá enseguida.', 'success');
     showConfirmationPopup(department, label);
+    speakOperatorConfirmation(department, label);
     await loadActive();
   } catch (e) {
     show(e.message, 'error');
@@ -241,6 +300,15 @@ document.addEventListener('keydown', e => {
 
 socket.on('request:changed', evt => {
   if (evt.stationCode !== code || !evt.department) return;
+
+  if (evt.action === 'assigned') {
+    speakOperatorMessage(
+      `Su solicitud de ${deptName(evt.department)} ha sido asignada. Enseguida será atendida.`
+    );
+    loadActive();
+    return;
+  }
+
   if (evt.action === 'resolved' || evt.action === 'closed') {
     const el = document.querySelector(`[data-ticket="${evt.department}"]`);
     if (el) {
@@ -255,3 +323,6 @@ socket.on('request:changed', evt => {
 });
 
 loadActive();
+
+
+

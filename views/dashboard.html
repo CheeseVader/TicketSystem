@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -148,6 +148,15 @@
 }
 </style>
 
+<style id="andon-audio-r1">
+.dash-audio-controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.andon-audio-btn{appearance:none;border:1px solid rgba(64,184,255,.30);background:rgba(17,34,51,.88);color:#dceeff;min-height:42px;padding:0 14px;border-radius:12px;font:inherit;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:.18s ease}
+.andon-audio-btn:hover{transform:translateY(-1px);border-color:rgba(64,184,255,.65)}
+.andon-audio-btn.audio-off{opacity:.68;border-color:rgba(255,255,255,.12)}
+.andon-audio-btn.audio-locked{border-color:#f5b942}
+#andonAudioIcon{font-size:18px;line-height:1}
+@media(max-width:700px){.dash-top{align-items:flex-start;gap:12px}.dash-audio-controls{width:100%;justify-content:flex-start}}
+</style>
 </head>
 <body class="dashboard-body">
 <div class="dashboard-shell">
@@ -169,7 +178,13 @@
   <main class="dashboard-content">
     <header class="dash-top">
       <div><h1 id="pageTitle">Dashboard</h1><p id="pageSubtitle">Monitoreo en tiempo real</p></div>
-      <div class="user-chip"><span class="live-dot"></span><span id="roleLabel">Cargando...</span></div>
+      <div class="dash-audio-controls">
+  <button type="button" id="andonAudioToggle" class="andon-audio-btn" title="Activar o desactivar alertas de audio">
+    <span id="andonAudioIcon">🔊</span>
+    <span id="andonAudioLabel">Activar audio</span>
+  </button>
+  <div class="user-chip"><span class="live-dot"></span><span id="roleLabel">Cargando...</span></div>
+</div>
     </header>
 
     <section class="app-view active" id="view-dashboard">
@@ -336,5 +351,6 @@
 
 <div id="toast" class="toast"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="/js/dashboard-r10.js?v=10.8.6"></script>
+<script src="/js/dashboard-r10.js?v=10.8.6-audio-r1"></script>
 </body></html>
+
