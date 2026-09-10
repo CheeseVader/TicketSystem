@@ -1,4 +1,6 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login - Andon Support</title><link rel="stylesheet" href="/css/app.css"></head><body class="login-body">
-<div class="login-card"><div class="brand">🏭 Andon Support</div><h1>Acceso de soporte</h1><p>Ingresa con tu cuenta de Sistemas, Mantenimiento o Superadmin.</p>
-<form method="post" action="/login"><label>Usuario<input name="username" required autocomplete="username"></label><label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label><button class="btn primary" type="submit">Ingresar</button></form>
-<div class="demo-accounts"><strong>Demo</strong><code>sistemas1 / Demo123!</code><code>mantenimiento1 / Demo123!</code><code>superadmin / Demo123!</code></div></div></body></html>
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Andon Support</title><link rel="stylesheet" href="/css/app.css?v=11.3"></head><body class="login-body">
+<div class="login-card"><div class="brand"><span aria-hidden="true">🏭</span> <span id="loginBrand">Andon Support</span></div><h1>Acceso de soporte</h1><p>Ingresa con tu cuenta de soporte.</p>
+<form method="post" action="/login"><label>Usuario<input name="username" required autocomplete="username"></label><label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label><button class="btn primary" type="submit">Ingresar</button></form></div>
+<script>
+(async()=>{try{const r=await fetch('/api/public-config',{cache:'no-store'});if(!r.ok)return;const c=await r.json();const b=String(c.brandName||'').trim();if(!b)return;document.getElementById('loginBrand').textContent=b+' · Andon Support';document.title=b+' · Andon Support';}catch{}})();
+</script></body></html>

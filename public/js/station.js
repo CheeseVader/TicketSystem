@@ -1,4 +1,4 @@
-﻿const socket = io();
+const socket = io();
 
 let andonFirstConnect=true;
 function forceFreshReload(){const u=new URL(location.href);u.searchParams.set('_r10',Date.now());location.replace(u)}
@@ -8,6 +8,22 @@ socket.on('connect',()=>{if(!andonFirstConnect)loadActive();andonFirstConnect=fa
 const code = location.pathname.split('/').pop().toUpperCase();
 
 const title = document.getElementById('stationTitle');
+
+async function applyStationBranding(){
+  try{
+    const [cfgRes,stRes]=await Promise.all([
+      fetch('/api/public-config',{cache:'no-store'}),
+      fetch(`/api/stations/${encodeURIComponent(code)}`,{cache:'no-store'})
+    ]);
+    const cfg=await cfgRes.json();
+    const st=await stRes.json();
+    const brand=String(cfg?.brandName||'').trim();
+    const plant=String(st?.plant_name||st?.plant_code||'').trim();
+    if(brand && plant) document.title=`${brand}-${plant}-Solicitar apoyo`;
+    else if(brand) document.title=`${brand}-Solicitar apoyo`;
+  }catch(_){ }
+}
+
 const statusBox = document.getElementById('stationStatus');
 const activeTickets = document.getElementById('activeTickets');
 const categoryModal = document.getElementById('categoryModal');
@@ -25,6 +41,7 @@ const confirmationTitle = document.getElementById('confirmationTitle');
 const confirmationMessage = document.getElementById('confirmationMessage');
 const confirmationDetail = document.getElementById('confirmationDetail');
 const closeConfirmation = document.getElementById('closeConfirmation');
+const departmentStep = document.getElementById('departmentStep');
 
 let selectedDepartment = null;
 let pendingOtherCategory = null;
@@ -46,11 +63,11 @@ const FALLBACK_CATEGORIES = {
 };
 
 const categoryCache = JSON.parse(JSON.stringify(FALLBACK_CATEGORIES));
-const deptName = d => d === 'systems' ? 'Sistemas' : 'Mantenimiento';
-const deptIcon = d => d === 'systems' ? '🖥️' : '🛠️';
+let departmentCatalog=[];const deptName=d=>departmentCatalog.find(x=>x.code===d)?.name||(d==='systems'?'Sistemas':d==='maintenance'?'Mantenimiento':d);const deptIcon=d=>d==='systems'?'🖥️':d==='maintenance'?'🛠️':'🧰';
 
 const stationMatch = code.match(/^L(\d+)-E(\d+)$/);
 title.textContent = stationMatch ? `Línea ${stationMatch[1]} - Estación ${stationMatch[2]}` : code;
+applyStationBranding();
 
 function tick() {
   document.getElementById('clock').textContent = new Date().toLocaleTimeString('es-MX');
@@ -124,7 +141,7 @@ function openCategories(department) {
   categoryModalHelp.textContent = `Selecciona el tipo de apoyo de ${deptName(department)}.`;
 
   // Mostrar botones INMEDIATAMENTE. No esperar una llamada HTTP.
-  renderCategories(categoryCache[department] || FALLBACK_CATEGORIES[department]);
+  renderCategories(categoryCache[department] || FALLBACK_CATEGORIES[department] || [{code:'other',label:'Otro incidente',icon:'🛠️'}]);
   categoryModal.classList.remove('hidden');
   document.body.classList.add('modal-open');
 
@@ -268,14 +285,7 @@ async function sendRequest(department, category, notes = '') {
   }
 }
 
-// Primer nivel: NUNCA envia solicitud; solo abre el popup.
-document.querySelectorAll('.support').forEach(button => {
-  button.addEventListener('click', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    openCategories(button.dataset.dept);
-  });
-});
+// Primer nivel dinámico: los botones se enlazan después de cargar las áreas.
 
 backButton.addEventListener('click', closeCategories);
 closeCategoryModal.addEventListener('click', closeCategories);
@@ -326,3 +336,7 @@ loadActive();
 
 
 
+
+function bindDepartmentButtons(){document.querySelectorAll('.support').forEach(btn=>btn.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openCategories(btn.dataset.dept)}))}
+async function loadDepartments(){try{const r=await fetch('/api/support-departments',{cache:'no-store'}),j=await r.json();if(!r.ok)throw new Error();departmentCatalog=j||[];departmentStep.innerHTML=departmentCatalog.map(d=>`<button class="support ${d.code==='systems'?'systems':d.code==='maintenance'?'maintenance':'dynamic'}" data-dept="${d.code}"><span class="support-icon">${deptIcon(d.code)}</span><strong>${d.name.toUpperCase()}</strong><small>Solicitar apoyo de ${d.name}</small></button>`).join('');bindDepartmentButtons()}catch{departmentStep.innerHTML='<div class="category-loading">No se pudieron cargar las áreas de soporte.</div>'}}
+loadDepartments();

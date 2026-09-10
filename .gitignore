@@ -50,3 +50,5 @@ release-output/
 *.dump
 *.sql.gz
 
+
+token.txt

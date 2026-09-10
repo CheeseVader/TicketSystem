@@ -110,3 +110,174 @@
  .analytics-panel,.analytics-kpi{break-inside:avoid;background:#fff!important;border-color:#bbb!important;color:#111!important;box-shadow:none!important}
  .analytics-panel h2,.analytics-kpi strong,.analytics-table tbody td{color:#111!important}
 }
+
+
+/* ============================= R11 LAYOUT 20x2 ============================= */
+#view-dashboard .lines-grid{display:grid;grid-template-columns:1fr!important;gap:14px;padding:14px;min-width:0}
+#view-dashboard .production-line-card{padding:12px;min-width:0;overflow:hidden}
+#view-dashboard .line-title{gap:12px}
+.line-layout-badge{font-size:10px;font-weight:800;color:#88a8c2;border:1px solid #2b4358;background:#0b1621;border-radius:999px;padding:5px 8px;white-space:nowrap}
+.production-layout-scroll{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;padding:2px 0 7px;scrollbar-width:thin;scrollbar-color:#36536b #0b141d}
+.production-layout-grid{--andon-layout-cols:20;display:grid;grid-template-columns:repeat(var(--andon-layout-cols),minmax(78px,1fr));grid-template-rows:repeat(2,88px);gap:6px;min-width:1560px;width:100%}
+.layout-slot{position:relative;min-width:0;min-height:88px;border:1px dashed rgba(87,117,143,.18);border-radius:9px;background:rgba(8,17,25,.20);display:flex;transition:border-color .12s ease,background .12s ease,box-shadow .12s ease}
+.layout-slot.layout-empty{align-items:center;justify-content:center;color:#466077;font-size:10px}
+.layout-slot.layout-empty>span{opacity:.55}
+.layout-slot.layout-drop-target{border-color:#57a7ff;background:rgba(47,128,237,.12);box-shadow:inset 0 0 0 2px rgba(87,167,255,.24)}
+.production-layout-grid .station-tile{width:100%;height:100%;min-height:0;box-sizing:border-box;padding:6px;gap:3px;position:relative;overflow:hidden}
+.production-layout-grid .station-tile .code{font-size:10px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.production-layout-grid .station-tile .station-name{font-size:9px}
+.production-layout-grid .station-tile .state{font-size:9px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.layout-position{position:absolute;right:4px;top:3px;color:#7894aa;font-size:8px;font-weight:800;opacity:.45}
+.station-tile.layout-editable{cursor:grab;outline:none;user-select:none;touch-action:none;box-shadow:inset 0 0 0 1px rgba(91,166,255,.16)}
+.station-tile.layout-editable:hover,.station-tile.layout-editable:focus{border-color:#67adff;box-shadow:0 0 0 2px rgba(63,144,238,.25);z-index:2}
+.station-tile.layout-editable:active{cursor:grabbing}.station-tile.layout-dragging{opacity:.38}
+.layout-edit-help{margin:12px 14px 0;padding:10px 12px;border:1px solid #31516b;background:#0d1924;border-radius:10px;color:#a8c4da;font-size:12px}
+.layout-edit-help.hidden{display:none}
+.layout-unplaced{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px;padding:8px 10px;border:1px solid #62472a;border-radius:9px;background:#2e2418;color:#ffc97c;font-size:10px}.layout-unplaced span{padding:3px 6px;border-radius:6px;background:#3b2d1c}
+#view-dashboard .admin-line-card{overflow:hidden}
+#view-dashboard .admin-line-card .admin-station-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+@media(max-width:1500px){#view-dashboard .admin-line-card .admin-station-grid{grid-template-columns:repeat(6,minmax(0,1fr))}}
+@media(max-width:1100px){#view-dashboard .admin-line-card .admin-station-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.production-layout-grid{grid-template-columns:repeat(20,minmax(88px,1fr));min-width:1760px}}
+@media(max-width:700px){#view-dashboard .admin-line-card .admin-station-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.production-layout-grid{grid-template-columns:repeat(20,minmax(92px,1fr));min-width:1840px}.line-layout-badge{display:none}}
+
+/* ANDON R11.1 - editor layout reforzado */
+.station-tile.layout-editable{cursor:grab!important}
+.station-tile.layout-selected{border-color:#6db5ff!important;box-shadow:0 0 0 3px rgba(64,157,255,.35)!important}
+body.andon-layout-pointer-drag{cursor:grabbing!important;user-select:none!important}
+body.andon-layout-pointer-drag *{cursor:grabbing!important}
+
+
+/* ============================= ANDON R11.2 ============================= */
+.layout-position{display:none!important}
+.layout-edit-help{display:none!important}
+.layout-head-actions{display:flex;align-items:end;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.plant-filter-label,.admin-head-filter{display:flex;flex-direction:column;gap:4px;color:#8fa8be;font-size:11px;font-weight:700}
+.plant-filter-label select,.admin-head-filter select{background:#0d1722;color:#eaf4ff;border:1px solid #2a4156;border-radius:9px;padding:7px 10px;min-width:130px}
+.production-layout-scroll{overflow:hidden!important;padding-bottom:2px!important}
+.production-layout-grid{display:grid!important;grid-template-columns:repeat(20,minmax(0,1fr))!important;grid-template-rows:repeat(2,clamp(58px,5.2vw,86px))!important;gap:clamp(2px,.28vw,5px)!important;min-width:0!important;width:100%!important}
+.layout-slot{min-width:0!important;min-height:0!important}
+.production-layout-grid .station-tile{padding:clamp(2px,.3vw,6px)!important;gap:clamp(1px,.18vw,3px)!important;border-radius:clamp(4px,.45vw,8px)!important}
+.production-layout-grid .station-tile .code{font-size:clamp(5px,.55vw,10px)!important;line-height:1.05}
+.production-layout-grid .station-tile .station-name{font-size:clamp(5px,.48vw,9px)!important;line-height:1.05}
+.production-layout-grid .station-tile .state{font-size:clamp(5px,.48vw,9px)!important;line-height:1.05}
+.production-line-card{padding:clamp(8px,.7vw,12px)!important}
+.lines-grid{grid-template-columns:1fr!important}
+.dashboard-shell{grid-template-columns:72px minmax(0,1fr)}
+.dashboard-shell:not(.sidebar-collapsed){grid-template-columns:220px minmax(0,1fr)}
+.dashboard-content{min-width:0}
+.admin-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:1200px){.admin-grid{grid-template-columns:1fr}.production-layout-grid{grid-template-columns:repeat(20,minmax(0,1fr))!important;min-width:0!important}}
+@media(max-width:900px){.dashboard-shell,.dashboard-shell.sidebar-collapsed,.dashboard-shell:not(.sidebar-collapsed){grid-template-columns:64px minmax(0,1fr)!important;display:grid!important}.sidebar{display:flex!important;position:relative!important;width:auto!important}.dashboard-shell:not(.sidebar-collapsed) .sidebar{position:fixed!important;z-index:4000;left:0;top:0;bottom:0;width:220px}.dashboard-content{padding:10px!important}.production-layout-grid{grid-template-rows:repeat(2,54px)!important}.production-layout-grid .station-tile .station-name{display:none}.line-layout-badge{display:none}}
+
+/* ===== ANDON R11.2 responsive final ===== */
+@media(max-width:1100px){
+  .dashboard-shell,.dashboard-shell.sidebar-collapsed,.dashboard-shell:not(.sidebar-collapsed){grid-template-columns:64px minmax(0,1fr)!important;display:grid!important}
+  .sidebar{display:flex!important;position:relative!important;width:auto!important}
+  .dashboard-shell:not(.sidebar-collapsed) .sidebar{position:fixed!important;z-index:4000;left:0;top:0;bottom:0;width:220px}
+}
+.production-layout-grid{container-type:inline-size}
+.production-layout-grid .layout-cell{min-width:0!important}
+.production-layout-grid .station-tile{min-width:0!important}
+@media(max-width:1400px){
+ .production-layout-grid{grid-template-rows:repeat(2,clamp(52px,5vw,72px))!important}
+ .production-layout-grid .station-tile .station-name{display:none!important}
+ .production-layout-grid .station-tile .code{font-size:clamp(4px,.52vw,8px)!important}
+ .production-layout-grid .station-tile .state{font-size:clamp(4px,.46vw,7px)!important}
+}
+@media(max-width:850px){
+ .production-layout-grid{grid-template-rows:repeat(2,48px)!important;gap:2px!important}
+ .production-layout-grid .station-tile .state{display:none!important}
+ .production-layout-grid .station-tile .code{font-size:clamp(3.5px,.7vw,6px)!important}
+}
+
+/* ============================= ANDON R11.3 ============================= */
+/* Dashboard: el resumen operativo queda limpio; solicitudes y actividad viven en sus vistas. */
+#view-dashboard{padding-bottom:18px}
+
+/* Filtros de Reportes: Planta gobierna el flujo y siempre aparece primero. */
+.report-filter-cascade{grid-template-columns:repeat(4,minmax(170px,1fr))!important;align-items:end}
+.report-filter-cascade .report-master-filter{position:relative}
+.report-filter-cascade .report-master-filter::after{content:'Filtro principal';position:absolute;right:8px;top:0;font-size:9px;color:#5faaff;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+.report-filter-cascade label{min-width:0}
+.report-filter-cascade select,.report-filter-cascade input{width:100%;min-width:0}
+@media(max-width:1100px){.report-filter-cascade{grid-template-columns:repeat(2,minmax(180px,1fr))!important}}
+@media(max-width:650px){.report-filter-cascade{grid-template-columns:1fr!important}}
+
+/* Grupos y Equipos: un bloque completo por entidad para evitar controles amontonados. */
+.production-admin-stack{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0}
+.production-admin-panel{min-width:0;overflow:hidden}
+.admin-panel-toolbar{align-items:flex-end;gap:16px;flex-wrap:wrap}
+.admin-panel-toolbar>div:first-child{flex:1 1 420px;min-width:0}
+.admin-form-wide{display:grid!important;grid-template-columns:minmax(190px,320px) minmax(220px,1fr) auto!important;gap:12px!important;align-items:end!important}
+#plantForm.admin-form-wide{grid-template-columns:minmax(240px,1fr) auto!important}
+.admin-form-wide label{min-width:0}
+.admin-form-wide input,.admin-form-wide select{width:100%;min-width:0}
+.roomy-admin-list .admin-item{display:grid!important;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;padding:14px 4px!important}
+.roomy-admin-list .admin-item>div:first-child{min-width:0}
+.roomy-admin-list .admin-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;max-width:100%}
+.roomy-admin-list .admin-actions .btn{white-space:nowrap}
+@media(max-width:1000px){
+  .admin-form-wide,#plantForm.admin-form-wide{grid-template-columns:1fr!important}
+  .roomy-admin-list .admin-item{grid-template-columns:1fr!important}
+  .roomy-admin-list .admin-actions{justify-content:flex-start}
+}
+
+/* Usuarios y áreas: una sola opción de menú con dos pestañas claras. */
+.entity-tabs{display:flex;gap:8px;margin:0 0 14px;padding:5px;border:1px solid #253a4c;border-radius:12px;background:#0d1721;width:max-content;max-width:100%}
+.entity-tab{appearance:none;border:0;background:transparent;color:#8eabc2;font:inherit;font-weight:800;padding:9px 18px;border-radius:8px;cursor:pointer}
+.entity-tab:hover{color:#fff;background:#14273a}
+.entity-tab.active{background:#2f80ed;color:#fff}
+.user-tab-panel{display:none}
+.user-tab-panel.active{display:block}
+
+/* Layout 20x2: nunca generar scroll horizontal; todas las 40 posiciones viven en el ancho disponible. */
+.production-layout-scroll{width:100%!important;max-width:100%!important;overflow-x:hidden!important}
+.production-layout-grid{width:100%!important;max-width:100%!important;min-width:0!important;grid-template-columns:repeat(20,minmax(0,1fr))!important}
+.layout-slot{overflow:hidden!important}
+.production-layout-grid .station-tile{min-width:0!important;max-width:100%!important}
+.production-layout-grid .station-tile .code,.production-layout-grid .station-tile .station-name,.production-layout-grid .station-tile .state{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+
+/* R11.4: pestañas minimalistas en Grupos y Equipos */
+.production-tab-panel{display:none;min-width:0}
+.production-tab-panel.active{display:block}
+.production-entity-tabs{margin-bottom:14px}
+
+/* R11.4: vista operacional muestra sólo alertas activas de líneas. */
+.line-alerts-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:14px}
+.line-alert-card{appearance:none;text-align:left;border:1px solid #35526b;border-radius:12px;background:#132331;color:#fff;padding:14px;cursor:pointer;min-width:0}
+.line-alert-card:hover{border-color:#5da8ff;transform:translateY(-1px)}
+.line-alert-card strong{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.line-alert-card small{display:block;color:#91b4cf;margin-top:4px}
+.line-alert-card .alert-status{margin-top:9px;font-weight:800;color:#ffcc66}
+.line-alert-empty{padding:28px;text-align:center;color:#84a4bc;border:1px dashed #284258;border-radius:12px}
+#lineMapModal .modal-card{width:min(96vw,1600px);max-width:none}
+#lineMapModal .production-line-card{margin:0}
+#lineMapModal .alert-focus{box-shadow:0 0 0 3px #ffb020,0 0 22px rgba(255,176,32,.55)!important;border-color:#ffb020!important}
+
+/* R11.5 popups de administracion */
+.admin-action-card{width:min(560px,94vw)}
+.admin-action-fields{display:grid;gap:14px;padding:18px 22px 4px}
+.admin-action-fields label{display:grid;gap:7px;color:#bcd0e2;font-weight:700;font-size:13px}
+.admin-action-fields input,.admin-action-fields select{width:100%;background:#0d1721;border:1px solid #35506a;color:#fff;border-radius:10px;padding:11px 12px;font:inherit}
+.admin-action-card .modal-actions{padding:18px 22px 22px}
+
+/* R11.6 - layout se administra exclusivamente en Grupos y Equipos */
+.admin-layout-section{margin:16px 18px 20px;padding:16px;border:1px solid var(--border);border-radius:16px;background:rgba(8,20,31,.34)}
+.admin-layout-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+.admin-layout-head h3{margin:0 0 4px;font-size:16px}
+.admin-layout-section .production-line-card{margin:0}
+.line-alert-card{width:100%;text-align:left;cursor:pointer}
+.line-alert-card:hover{border-color:#338cff;transform:translateY(-1px)}
+#lineMapModal .modal-card{width:min(96vw,1500px);max-width:1500px}
+@media(max-width:760px){.admin-layout-head{align-items:flex-start;flex-direction:column}.admin-layout-head .btn{width:100%}}
+
+/* R11.7 - alertas administrativas y asignación delegada */
+.dashboard-alert-section{padding:12px 14px 2px}
+.dashboard-alert-section>h3{margin:0 0 4px;font-size:13px;color:#dceaf6;display:flex;align-items:center;gap:8px}
+.dashboard-alert-section>h3 span{display:inline-flex;min-width:22px;height:22px;padding:0 7px;align-items:center;justify-content:center;border-radius:999px;background:#20364a;color:#9fd0ff;font-size:11px}
+.dashboard-alert-section .line-alerts-summary{padding:8px 0 12px}
+.admin-alert-card{border-color:#6a5731;background:#1b211f}
+.admin-alert-card:hover{border-color:#e4ae43}
+.admin-alert-card .alert-status{color:#ffc85c}
+.assignment-load{font-size:11px;color:#8fa3b5}

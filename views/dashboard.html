@@ -1,11 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Andon Support R10</title>
-<link rel="stylesheet" href="/css/app.css?v=10">
-<link rel="stylesheet" href="/css/dashboard-r10.css?v=10.8.1">
+<title>Andon Support R11.4</title>
+<link rel="stylesheet" href="/css/app.css?v=11.4">
+<link rel="stylesheet" href="/css/dashboard-r10.css?v=11.4.0">
 
 <style id="r1083-responsive-reports">
 /* R10.8.3: Reportes optimizados para zoom 100% / 1366-1920px */
@@ -160,17 +160,17 @@
 </head>
 <body class="dashboard-body">
 <div class="dashboard-shell">
-  <aside class="sidebar">
-    <div class="brand light">🏭 Andon Support</div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand-row"><div class="brand light"><span class="brand-icon">🏭</span><span class="brand-text" id="dashboardBrand">Andon Support</span></div><button type="button" id="sidebarToggle" class="sidebar-toggle" aria-label="Ocultar menú" title="Ocultar menú">☰</button></div>
     <nav id="sideNav">
-      <a href="#dashboard" data-view="dashboard" class="active">▦ Dashboard</a>
-      <a href="#requests" data-view="requests">🚨 Solicitudes</a>
-      <a href="#tickets" data-view="tickets">🎫 Tickets</a>
-      <a href="#history" data-view="history" class="manager-only hidden">🕘 Historial</a>
-      <a href="#reports" data-view="reports">📊 Reportes</a>
-      <a href="#groups" data-view="groups" class="manager-only hidden">⚙ Grupos y Equipos</a>
-      <a href="#users" data-view="users" class="manager-only hidden">👥 Usuarios</a>
-      <a href="#sla" data-view="sla" class="manager-only hidden">⏱ SLA</a>
+      <a href="#dashboard" data-view="dashboard" class="active"><span class="nav-icon">▦</span><span class="nav-label">Dashboard</span></a>
+      <a href="#requests" data-view="requests"><span class="nav-icon">🚨</span><span class="nav-label">Solicitudes</span></a>
+      <a href="#tickets" data-view="tickets"><span class="nav-icon">🎫</span><span class="nav-label">Tickets</span></a>
+      <a href="#history" data-view="history" class="manager-only hidden"><span class="nav-icon">🕘</span><span class="nav-label">Historial</span></a>
+      <a href="#reports" data-view="reports"><span class="nav-icon">📊</span><span class="nav-label">Reportes</span></a>
+      <a href="#groups" data-view="groups" class="manager-only hidden"><span class="nav-icon">⚙</span><span class="nav-label">Grupos y Equipos</span></a>
+      <a href="#users" data-view="users" class="manager-only hidden"><span class="nav-icon">👥</span><span class="nav-label">Usuarios y áreas</span></a>
+      <a href="#sla" data-view="sla" class="manager-only hidden"><span class="nav-icon">⏱</span><span class="nav-label">SLA</span></a>
     </nav>
     <div class="sidebar-foot"><span id="sideUser"></span><form method="post" action="/logout"><button class="logout">Cerrar sesión</button></form></div>
   </aside>
@@ -196,8 +196,7 @@
         <article><span>Cerrados hoy</span><strong id="metricClosedToday">0</strong></article>
         <article><span>Total equipos</span><strong id="metricStations">0</strong></article>
       </section>
-      <section class="panel"><div class="panel-head"><div><h2>Grupos y equipos</h2><p class="panel-note">Estado actual por estación</p></div></div><div class="lines-grid" id="groupsGrid"></div></section>
-      <section class="lower-grid"><div class="panel"><div class="panel-head"><h2>Pool sin asignar</h2><button class="text-btn" data-go="requests">Ver solicitudes</button></div><div class="table-wrap"><table><thead><tr><th>Grupo</th><th>Equipo</th><th>Área</th><th>Categoría</th><th>Descripción</th><th>Espera</th><th>SLA</th><th>Acción</th></tr></thead><tbody id="dashboardRequests"></tbody></table></div></div><div class="panel"><div class="panel-head"><h2>Actividad reciente</h2></div><div id="recentList" class="recent-list"></div></div></section>
+      <section class="panel"><div class="panel-head"><div><h2>Grupos y equipos</h2><p class="panel-note">Estado actual por estación · layout horizontal 20 × 2 por línea</p></div><div class="layout-head-actions"><label class="plant-filter-label">Planta<select id="dashboardPlantFilter"><option value="">Todas</option></select></label></div></div><div class="lines-grid" id="groupsGrid"></div></section>
     </section>
 
     <section class="app-view" id="view-requests">
@@ -224,15 +223,15 @@
 
     <section class="app-view" id="view-reports">
       <section class="analytics-filters panel">
-        <div class="analytics-filter-grid">
-          <label>Desde<input type="date" id="repFrom"></label>
-          <label>Hasta<input type="date" id="repTo"></label>
-          <label>Área<select id="repDept"><option value="">Todas</option><option value="systems">Sistemas</option><option value="maintenance">Mantenimiento</option></select></label>
-          <label>Grupo<select id="repGroup"><option value="">Todos</option></select></label>
+        <div class="analytics-filter-grid report-filter-cascade">
+          <label class="report-master-filter">Planta<select id="repPlant"><option value="">Todas</option></select></label>
+          <label>Área<select id="repDept"><option value="">Todas</option></select></label>
+          <label>Grupo / Línea<select id="repGroup"><option value="">Todos</option></select></label>
           <label>Categoría<select id="repCategory"><option value="">Todas</option></select></label>
           <label>Usuario / Técnico<select id="repEngineer"><option value="">Todos</option></select></label>
           <label>Estado<select id="repStatus"><option value="">Todos</option></select></label>
-          
+          <label>Desde<input type="date" id="repFrom"></label>
+          <label>Hasta<input type="date" id="repTo"></label>
         </div>
       </section>
 
@@ -294,18 +293,56 @@
     </section>
 
     <section class="app-view" id="view-groups">
-      <div class="admin-grid">
-        <section class="panel"><div class="panel-head"><div><h2>Grupos / Líneas</h2><p class="panel-note">Administra los nombres de las líneas o grupos de producción.</p></div></div><form id="groupForm" class="admin-form"><label>Nombre<input id="groupName" placeholder="V4" required></label><button class="btn primary" type="submit">Agregar grupo</button></form><div id="groupsAdminList" class="admin-list"></div></section>
-        <section class="panel"><div class="panel-head"><div><h2>Equipos / Estaciones</h2><p class="panel-note">Selecciona el grupo y escribe únicamente el nombre del equipo, por ejemplo PINTURA.</p></div></div><form id="stationForm" class="admin-form"><label>Grupo<select id="stationGroup" required></select></label><label>Nombre<input id="stationName" placeholder="PINTURA" required></label><button class="btn primary" type="submit">Agregar equipo</button></form><div id="stationsAdminList" class="admin-list stations"></div></section>
+      <div class="entity-tabs production-entity-tabs" role="tablist" aria-label="Administración de producción">
+        <button type="button" class="entity-tab active" data-production-tab="plants">Plantas</button>
+        <button type="button" class="entity-tab" data-production-tab="groups">Líneas</button>
+        <button type="button" class="entity-tab" data-production-tab="stations">Estaciones</button>
+      </div>
+      <div class="production-admin-stack">
+        <div class="production-tab-panel active" data-production-panel="plants">
+        <section class="panel production-admin-panel">
+          <div class="panel-head"><div><h2>Plantas</h2><p class="panel-note">Administra las ubicaciones que gobiernan líneas, estaciones, Dashboard y Reportes.</p></div></div>
+          <form id="plantForm" class="admin-form admin-form-wide superadmin-only"><label>Nombre de planta<input id="plantName" placeholder="NUEVA PLANTA" required></label><button class="btn primary" type="submit">Agregar planta</button></form>
+          <div id="plantsAdminList" class="admin-list"></div>
+        </section>
+        </div>
+
+        <div class="production-tab-panel" data-production-panel="groups">
+        <section class="panel production-admin-panel">
+          <div class="panel-head admin-panel-toolbar"><div><h2>Grupos / Líneas</h2><p class="panel-note">Cada línea pertenece a una planta. Puedes clonarla completa con estaciones, layout y SLA.</p></div><label class="admin-head-filter">Filtrar planta<select id="groupPlantFilter"><option value="">Todas</option></select></label></div>
+          <form id="groupForm" class="admin-form admin-form-wide"><label>Planta<select id="groupPlant" required></select></label><label>Nombre de línea<input id="groupName" placeholder="V4" required></label><button class="btn primary" type="submit">Agregar línea</button></form>
+          <div id="groupsAdminList" class="admin-list roomy-admin-list"></div>
+        </section>
+        </div>
+
+        <div class="production-tab-panel" data-production-panel="stations">
+        <section class="panel production-admin-panel">
+          <div class="panel-head admin-panel-toolbar"><div><h2>Equipos / Estaciones</h2><p class="panel-note">Primero filtra la planta, después selecciona la línea. El código se genera automáticamente.</p></div><label class="admin-head-filter">Filtrar planta<select id="stationPlantFilter"><option value="">Todas</option></select></label></div>
+          <form id="stationForm" class="admin-form admin-form-wide"><label>Grupo / Línea<select id="stationGroup" required></select></label><label>Nombre de estación<input id="stationName" placeholder="PINTURA" required></label><button class="btn primary" type="submit">Agregar estación</button></form>
+          <section class="admin-layout-section"><div class="admin-layout-head"><div><h3>Layout de la línea</h3><p class="panel-note">Selecciona la línea arriba y acomoda sus estaciones en la cuadrícula 20 × 2.</p></div><button type="button" id="adminLayoutEditToggle" class="btn small secondary">✏ Editar layout</button></div><div id="adminLayoutEditor"></div></section>
+          <div id="stationsAdminList" class="admin-list stations roomy-admin-list"></div>
+        </section>
+        </div>
       </div>
     </section>
 
     <section class="app-view" id="view-users">
-      <section class="panel"><div class="panel-head"><div><h2>Usuarios</h2><p class="panel-note">Superadmin: control total. Admin: administración excepto eliminar/restablecer Superadmin. Ingeniero: Dashboard, Solicitudes, Tickets y Reportes según área.</p></div></div><form id="userForm" class="user-form"><label>Área<select id="userDepartment"><option value="systems">Sistemas</option><option value="maintenance">Mantenimiento</option></select></label><label>Rol<select id="userRole"><option value="engineer">Ingeniero</option><option value="admin">Administrador</option><option value="superadmin" id="superadminOption">Super Administrador</option></select></label><label>Usuario<input id="userUsername" required autocomplete="off"></label><label>Nombre<input id="userFullName" required></label><label>Contraseña<input type="password" id="userPassword" minlength="6" required autocomplete="new-password"></label><button class="btn primary" type="submit">Crear usuario</button></form><div class="table-wrap"><table><thead><tr><th>Área</th><th>Rol</th><th>Usuario</th><th>Nombre</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTable"></tbody></table></div></section>
+      <div class="entity-tabs" role="tablist" aria-label="Administración de usuarios y áreas">
+        <button type="button" class="entity-tab active" data-user-tab="users">Usuarios</button>
+        <button type="button" class="entity-tab superadmin-only" data-user-tab="areas">Áreas</button>
+      </div>
+
+      <div class="user-tab-panel active" data-user-panel="users">
+        <section class="panel"><div class="panel-head"><div><h2>Usuarios</h2><p class="panel-note">Asigna roles y área de responsabilidad. Supervisores e ingenieros quedan limitados a su área.</p></div></div><form id="userForm" class="user-form"><label>Área<select id="userDepartment"></select></label><label>Rol<select id="userRole"><option value="engineer">Ingeniero</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option><option value="superadmin" id="superadminOption">Super Administrador</option></select></label><label>Usuario<input id="userUsername" required autocomplete="off"></label><label>Nombre<input id="userFullName" required></label><label>Contraseña<input type="password" id="userPassword" minlength="6" required autocomplete="new-password"></label><button class="btn primary" type="submit">Crear usuario</button></form><div class="table-wrap"><table><thead><tr><th>Área</th><th>Rol</th><th>Usuario</th><th>Nombre</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTable"></tbody></table></div></section>
+      </div>
+
+      <div class="user-tab-panel superadmin-only" data-user-panel="areas">
+        <section class="panel"><div class="panel-head"><div><h2>Áreas de soporte</h2><p class="panel-note">Crea las áreas que después podrás asignar a Supervisores e Ingenieros: Sistemas, Mantenimiento, Calidad, etc.</p></div></div><form id="departmentForm" class="admin-form admin-form-wide"><label>Nombre del área<input id="departmentName" placeholder="Calidad" required></label><button class="btn primary" type="submit">Agregar área</button></form><div id="departmentsAdminList" class="admin-list roomy-admin-list"></div></section>
+      </div>
     </section>
 
     <section class="app-view" id="view-sla">
-      <section class="panel"><div class="panel-head"><div><h2>Políticas SLA</h2><p class="panel-note">Puedes tener SLA general, por área o por tipo de incidencia. Resuelto se cierra automáticamente tras la ventana configurada.</p></div></div><form id="slaForm" class="sla-form"><label>Nombre<input id="slaName" placeholder="Sistemas crítico" required></label><label>Área<select id="slaDept"><option value="">Todas</option><option value="systems">Sistemas</option><option value="maintenance">Mantenimiento</option></select></label><label>Grupo<select id="slaGroup"><option value="">Todos</option></select></label><label>Equipo<select id="slaStation"><option value="">Todos</option></select></label><label>Categoría<select id="slaCategory"><option value="">Todas</option></select></label><label>Respuesta (min)<input type="number" id="slaResponse" value="5" min="1" required></label><label>Resolución (min)<input type="number" id="slaResolution" value="60" min="1" required></label><label>Autocierre (min)<input type="number" id="slaAutoclose" value="10" min="1" required></label><label>Prioridad<input type="number" id="slaPriority" value="100" min="1"></label><label class="check-label"><input type="checkbox" id="slaPause" checked> Pausar SLA en espera</label><button class="btn primary" type="submit">Crear SLA</button></form><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Área</th><th>Grupo / Equipo</th><th>Categoría</th><th>Respuesta</th><th>Resolución</th><th>Autocierre</th><th>Espera</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="slaTable"></tbody></table></div></section>
+      <section class="panel"><div class="panel-head"><div><h2>Políticas SLA</h2><p class="panel-note">Puedes tener SLA general, por área o por tipo de incidencia. Resuelto se cierra automáticamente tras la ventana configurada.</p></div></div><form id="slaForm" class="sla-form"><label>Nombre<input id="slaName" placeholder="Sistemas crítico" required></label><label>Área<select id="slaDept"><option value="">Todas</option></select></label><label>Grupo<select id="slaGroup"><option value="">Todos</option></select></label><label>Equipo<select id="slaStation"><option value="">Todos</option></select></label><label>Categoría<select id="slaCategory"><option value="">Todas</option></select></label><label>Respuesta (min)<input type="number" id="slaResponse" value="5" min="1" required></label><label>Resolución (min)<input type="number" id="slaResolution" value="60" min="1" required></label><label>Autocierre (min)<input type="number" id="slaAutoclose" value="10" min="1" required></label><label class="check-label"><input type="checkbox" id="slaPause" checked> Pausar SLA en espera</label><button class="btn primary" type="submit">Crear SLA</button></form><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Área</th><th>Grupo / Equipo</th><th>Categoría</th><th>Respuesta</th><th>Resolución</th><th>Autocierre</th><th>Espera</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="slaTable"></tbody></table></div></section>
     </section>
   </main>
 </div>
@@ -351,6 +388,6 @@
 
 <div id="toast" class="toast"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="/js/dashboard-r10.js?v=10.8.6-audio-r1"></script>
+<script src="/js/dashboard-r10.js?v=11.9.0-managerial-r1"></script>
 </body></html>
 

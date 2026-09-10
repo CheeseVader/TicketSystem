@@ -67,3 +67,26 @@ body.modal-open{overflow:hidden}
 }
 .status-chip.requested{background:#fee2e2;color:#991b1b}
 .status-chip.attending{background:#fef3c7;color:#92400e}
+
+/* ANDON R11.1 - Sidebar retractil + branding */
+.dashboard-shell{transition:grid-template-columns .18s ease}
+.sidebar{transition:width .18s ease,padding .18s ease}
+.sidebar-brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:20px}
+.sidebar-brand-row .brand.light{margin:6px 8px 0;display:flex;align-items:center;gap:8px;min-width:0}
+.brand-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-toggle{width:34px;height:34px;flex:0 0 34px;border:1px solid #2b4155;border-radius:9px;background:#142231;color:#cfe4f6;cursor:pointer;font-size:18px;line-height:1}
+.sidebar-toggle:hover{background:#1a3044}
+.sidebar nav a{display:flex;align-items:center;gap:10px;white-space:nowrap;overflow:hidden}
+.nav-icon{width:20px;min-width:20px;text-align:center}
+.dashboard-shell.sidebar-collapsed{grid-template-columns:72px 1fr}
+.dashboard-shell.sidebar-collapsed .sidebar{padding-left:10px;padding-right:10px}
+.dashboard-shell.sidebar-collapsed .brand-text,.dashboard-shell.sidebar-collapsed .nav-label,.dashboard-shell.sidebar-collapsed .sidebar-foot #sideUser,.dashboard-shell.sidebar-collapsed .sidebar-foot .logout{display:none}
+.dashboard-shell.sidebar-collapsed .sidebar-brand-row{flex-direction:column;gap:10px}
+.dashboard-shell.sidebar-collapsed .sidebar-brand-row .brand.light{margin:4px 0 0;font-size:0}
+.dashboard-shell.sidebar-collapsed .brand-icon{font-size:22px}
+.dashboard-shell.sidebar-collapsed .sidebar nav a{justify-content:center;padding-left:10px;padding-right:10px}
+.dashboard-shell.sidebar-collapsed .sidebar-toggle{transform:rotate(180deg)}
+.demo-accounts{display:none!important}
+@media(max-width:1100px){.dashboard-shell.sidebar-collapsed{grid-template-columns:1fr}}
+
+.support.dynamic{border:2px solid #8aa4bb;color:#315f86;box-shadow:0 12px 30px rgba(60,90,120,.10)}

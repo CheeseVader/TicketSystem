@@ -26,6 +26,13 @@ read_secret(){
   printf '%s' "$v"
 }
 
+read_value(){
+  local prompt="$1" default="${2:-}" v=""
+  if [[ -n "$default" ]]; then read -r -p "$prompt [$default]: " v </dev/tty || true; else read -r -p "$prompt: " v </dev/tty || true; fi
+  [[ -n "$v" ]] || v="$default"
+  printf '%s' "$v"
+}
+
 say "Dependencias Linux/Raspberry Pi"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -70,6 +77,12 @@ CHANNEL=stable
 EOF
 chmod 600 "$UPDATER_DIR/updater.env"
 
+say "Identidad de la instalacion"
+BRAND_NAME="${BRAND_NAME:-}"
+if [[ -z "$BRAND_NAME" ]]; then BRAND_NAME="$(read_value "Nombre de la marca/empresa" "TCL")"; fi
+[[ -n "$BRAND_NAME" ]] || die "El nombre de la marca no puede quedar vacio."
+ok "Marca configurada: $BRAND_NAME"
+
 say "PostgreSQL ANDON"
 systemctl enable --now postgresql
 DB_PASSWORD="$(openssl rand -hex 24)"
@@ -92,6 +105,7 @@ cat > "$CONFIG_DIR/andon.env" <<EOF
 HOST=0.0.0.0
 PORT=$PORT
 NODE_ENV=production
+BRAND_NAME="$BRAND_NAME"
 DATABASE_URL=postgresql://andon_app:$DB_PASSWORD@127.0.0.1:5432/andon_support
 SESSION_SECRET=$SESSION_SECRET
 EOF
