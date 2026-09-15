@@ -308,6 +308,10 @@ document.addEventListener('keydown', e => {
   if (!confirmationModal.classList.contains('hidden')) hideConfirmationPopup();
 });
 
+/* R187_TERMINAL_FILTER */
+function r187IsTerminalStatus(s){
+  return ['resolved','closed','cancelled'].includes(String(s||'').toLowerCase());
+}
 socket.on('request:changed', evt => {
   if (evt.stationCode !== code || !evt.department) return;
 

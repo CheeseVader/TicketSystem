@@ -12,12 +12,18 @@
     "db:migrate": "node src/migrate-managed.js"
   },
   "dependencies": {
+    "@entree_pos/xlsx": "^0.4.1",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.1",
     "express-session": "^1.18.1",
     "helmet": "^8.0.0",
+    "html2canvas": "^1.4.1",
+    "jszip": "^3.10.2",
     "pg": "^8.13.1",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.35.4",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

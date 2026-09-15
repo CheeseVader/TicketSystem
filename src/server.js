@@ -1,5 +1,8 @@
 require('dotenv').config();
 const path = require('path');
+const ExcelJS = require('exceljs');
+const sharp = require('sharp');
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const session = require('express-session');
@@ -17,6 +20,12 @@ const APP_BUILD = 'R11.5';
 const BRAND_NAME = String(process.env.BRAND_NAME || 'TCL').trim() || 'TCL';
 const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
 
+// ANDON_R187_P64_SESSION_BOOT_RESET
+const SESSION_BOOT_READY = require('./r187-session-boot-reset')(pool,BOOT_ID)
+  .catch(err=>{
+    console.error('[SESSION BOOT RESET ERROR]',err);
+    throw err;
+  });
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use((req,res,next)=>{
   if (req.path.startsWith('/station/') || req.path === '/soporte' || req.path === '/dashboard' || req.path === '/login' || /\.(js|css|html)$/.test(req.path)) {
@@ -35,24 +44,98 @@ app.use(session({
   saveUninitialized:false,
   cookie:{httpOnly:true,sameSite:'lax',maxAge:8*60*60*1000}
 }));
+// ANDON_R187_P64_WAIT_LOGIN
+app.use(async(req,res,next)=>{
+  const isLoginPost =
+    req.method==='POST' &&
+    (req.path==='/login' || req.path==='/api/login' || req.path==='/api/auth/login');
+
+  const isSessionApi = req.path.startsWith('/api/session/');
+
+  if(!isLoginPost && !isSessionApi)return next();
+
+  try{
+    await SESSION_BOOT_READY;
+    next();
+  }catch(e){
+    console.error('SESSION_BOOT_READY',e);
+    if(req.path.startsWith('/api/')){
+      return res.status(503).json({error:'Inicializando control de sesiones. Intenta nuevamente.'});
+    }
+    return res.status(503).send('Inicializando control de sesiones. Intenta nuevamente.');
+  }
+});
 
 const ACTIVE_TICKET_STATUSES = ['assigned','in_progress','waiting','escalated','resolved'];
 const HISTORY_STATUSES = ['closed','cancelled'];
-const OPEN_REQUEST_STATUSES = ['unassigned','assigned','in_progress','waiting','escalated','resolved'];
+const OPEN_REQUEST_STATUSES = ['unassigned','assigned','in_progress','waiting','escalated'];
 
-function requireAuth(req,res,next){
-  if(!req.session.user) return req.path.startsWith('/api/') ? res.status(401).json({error:'No autenticado'}) : res.redirect('/login');
-  next();
+/* ANDON_R187_SINGLE_SESSION_HELPERS */
+const USER_SESSION_TTL_MS = 8*60*60*1000;
+
+function loginClientIp(req){
+  const xf=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();
+  return (xf || req.socket?.remoteAddress || '').slice(0,100);
 }
-function isManager(user){ return user && ['superadmin','admin'].includes(user.role); }
+
+function sessionExpiredResponse(req,res){
+  req.session.destroy(()=>{});
+  if(req.path.startsWith('/api/')){
+    return res.status(401).json({
+      error:'Tu sesión ya no está activa. Inicia sesión nuevamente.',
+      code:'SESSION_NOT_ACTIVE'
+    });
+  }
+  return res.redirect('/login?session=closed');
+}
+
+async function validateActiveUserSession(req){
+  const u=req.session?.user;
+  const token=req.session?.sessionToken;
+  if(!u || !token) return false;
+
+  const {rows}=await pool.query(`
+    SELECT user_id
+    FROM active_user_sessions
+    WHERE user_id=$1
+      AND session_token=$2
+      AND expires_at>NOW()
+  `,[u.id,token]);
+
+  if(!rows[0]) return false;
+
+  await pool.query(`
+    UPDATE active_user_sessions
+    SET last_seen_at=NOW()
+    WHERE user_id=$1 AND session_token=$2
+  `,[u.id,token]);
+
+  return true;
+}
+function requireAuth(req,res,next){
+  if(!req.session?.user) return req.path.startsWith('/api/')
+    ? res.status(401).json({error:'Sesión requerida'})
+    : res.redirect('/login');
+
+  validateActiveUserSession(req).then(ok=>{
+    if(!ok) return sessionExpiredResponse(req,res);
+    next();
+  }).catch(e=>{
+    console.error('R1.8.7 validateActiveUserSession:',e);
+    res.status(500).json({error:'No se pudo validar la sesión activa.'});
+  });
+}
+function isManager(user){
+  return !!user && ['superadmin','admin'].includes(user.role);
+}
 function requireManager(req,res,next){
   if(!req.session.user) return res.status(401).json({error:'No autenticado'});
-  if(!isManager(req.session.user)) return res.status(403).json({error:'SÃ³lo Administradores'});
+  if(!isManager(req.session.user)) return res.status(403).json({error:'Sólo Administradores'});
   next();
 }
 function requireSuperadmin(req,res,next){
   if(!req.session.user) return res.status(401).json({error:'No autenticado'});
-  if(req.session.user.role!=='superadmin') return res.status(403).json({error:'SÃ³lo Superadmin'});
+  if(req.session.user.role!=='superadmin') return res.status(403).json({error:'Sólo Superadmin'});
   next();
 }
 function userDepartment(user){ return user && ['engineer','supervisor'].includes(user.role) ? user.department : null; }
@@ -131,16 +214,118 @@ app.get('/',(req,res)=>res.redirect('/station/L1-E1'));
 app.get('/login',(req,res)=>res.sendFile(path.join(__dirname,'..','views','login.html')));
 app.post('/login',async(req,res)=>{
   const username=String(req.body.username||'').trim();
-  const {rows}=await pool.query(`SELECT * FROM users WHERE username=$1 AND active=TRUE AND deleted_at IS NULL`,[username]);
-  const user=rows[0];
-  if(!user || !(await bcrypt.compare(String(req.body.password||''),user.password_hash))) return res.status(401).send('Usuario o contraseÃ±a incorrectos. <a href="/login">Regresar</a>');
-  req.session.user={id:user.id,username:user.username,fullName:user.full_name,role:user.role,department:user.department||null};
-  res.redirect('/dashboard');
+  const password=String(req.body.password||'');
+  const client=await pool.connect();
+
+  try{
+    const {rows}=await client.query(`
+      SELECT *
+      FROM users
+      WHERE username=$1 AND active=TRUE AND deleted_at IS NULL
+      LIMIT 1
+    `,[username]);
+    const user=rows[0];
+
+    if(!user || !(await bcrypt.compare(password,user.password_hash))){
+      return res.status(401).send('Usuario o contraseña incorrectos. <a href="/login">Regresar</a>');
+    }
+
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM active_user_sessions WHERE expires_at<=NOW()`);
+
+    const active=(await client.query(`
+      SELECT user_id,login_at,last_seen_at,expires_at
+      FROM active_user_sessions
+      WHERE user_id=$1
+      FOR UPDATE
+    `,[user.id])).rows[0];
+
+    if(active){
+      await client.query('ROLLBACK');
+      return res.status(409).send(
+        '<!doctype html><html><head><meta charset="utf-8"><title>Sesión activa</title></head>'+
+        '<body style="font-family:Arial,sans-serif;background:#0d141d;color:#fff;padding:40px">'+
+        '<div style="max-width:620px;margin:auto;background:#17212d;padding:28px;border-radius:14px">'+
+        '<h2>Este usuario ya tiene una sesión activa</h2>'+
+        '<p>Cierre la sesión anterior o solicite al administrador liberarla.</p>'+
+        '<p><a style="color:#7dd3fc" href="/login">Regresar al inicio de sesión</a></p>'+
+        '</div></body></html>'
+      );
+    }
+
+    const token=crypto.randomUUID();
+    const expiresAt=new Date(Date.now()+USER_SESSION_TTL_MS);
+
+    try{
+      await client.query(`
+        INSERT INTO active_user_sessions(
+          user_id,session_token,login_at,last_seen_at,expires_at,ip_address,user_agent
+        )
+        VALUES($1,$2,NOW(),NOW(),$3,$4,$5)
+      `,[
+        user.id,
+        token,
+        expiresAt,
+        loginClientIp(req),
+        String(req.headers['user-agent']||'').slice(0,1000)
+      ]);
+    }catch(e){
+      if(e.code==='23505'){
+        await client.query('ROLLBACK');
+        return res.status(409).send(
+          'Este usuario ya tiene una sesión activa en otro dispositivo. '+
+          '<a href="/login">Regresar</a>'
+        );
+      }
+      throw e;
+    }
+
+    await client.query('COMMIT');
+
+    req.session.user={
+      id:user.id,
+      username:user.username,
+      fullName:user.full_name,
+      role:user.role,
+      department:user.department||null,
+      plantId:user.plant_id||null
+    };
+    req.session.sessionToken=token;
+
+    req.session.save(err=>{
+      if(err){
+        pool.query(`DELETE FROM active_user_sessions WHERE user_id=$1 AND session_token=$2`,[user.id,token]).catch(()=>{});
+        console.error('R1.8.7 session save:',err);
+        return res.status(500).send('No se pudo iniciar la sesión.');
+      }
+      res.redirect('/dashboard');
+    });
+  }catch(e){
+    try{await client.query('ROLLBACK')}catch{}
+    console.error('R1.8.7 login:',e);
+    res.status(500).send('No se pudo iniciar sesión.');
+  }finally{
+    client.release();
+  }
 });
-app.post('/logout',(req,res)=>req.session.destroy(()=>res.redirect('/login')));
+app.post('/logout',async(req,res)=>{
+  const userId=req.session?.user?.id;
+  const token=req.session?.sessionToken;
+  try{
+    if(userId && token){
+      await pool.query(
+        `DELETE FROM active_user_sessions WHERE user_id=$1 AND session_token=$2`,
+        [userId,token]
+      );
+    }
+  }catch(e){
+    console.error('R1.8.7 logout cleanup:',e);
+  }
+  req.session.destroy(()=>res.redirect('/login'));
+});
 app.get('/station/:code',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found || !found.station.enabled || found.station.group_enabled===false) return res.status(404).send('EstaciÃ³n no encontrada');
+  if(!found || !found.station.enabled || found.station.group_enabled===false) return res.status(404).send('Estación no encontrada');
   if(found.alias) return res.redirect(302,`/station/${found.station.code}`);
   res.sendFile(path.join(__dirname,'..','views','station.html'));
 });
@@ -200,6 +385,127 @@ app.post('/api/soporte/requests',async(req,res)=>{
     res.status(201).json({...q,plant_name:plant.name,department_label:depRow.name,request_label:cat.label});
   }catch(e){console.error('soporte request',e);res.status(500).json({error:`No se pudo crear la solicitud${e.code?' ('+e.code+')':''}`});}
 });
+// ANDON_R187_P6_ADMIN_DETAIL
+app.get('/api/r187/admin-open-requests',requireAuth,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        r.id,r.source,r.requested_by,r.requester_area,r.support_location,
+        r.department,r.category,r.notes,r.status,r.requested_at,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        t.id ticket_id,t.ticket_number,t.status ticket_status,
+        COALESCE(u.full_name,u.username) assigned_name
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN users u ON u.id=t.assigned_to
+      WHERE r.source='administrative'
+        AND r.status IN ('unassigned','assigned','in_progress','waiting','escalated')
+        AND COALESCE(t.status,r.status) NOT IN ('resolved','closed','cancelled')
+      ORDER BY r.requested_at DESC
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('P6 admin-open-requests',e);
+    res.status(500).json({error:'No se pudieron cargar las solicitudes administrativas.'});
+  }
+});
+
+app.get('/api/r187/requests/:id/detail-p6',requireAuth,async(req,res)=>{
+  try{
+    const q=await pool.query(`
+      SELECT
+        r.*,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        t.id ticket_id,t.ticket_number,t.status ticket_status,
+        t.assigned_to,t.assigned_at,
+        COALESCE(u.full_name,u.username) assigned_name
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN users u ON u.id=t.assigned_to
+      WHERE r.id=$1
+      LIMIT 1
+    `,[req.params.id]);
+    if(!q.rows[0])return res.status(404).json({error:'Solicitud no encontrada.'});
+    res.json(q.rows[0]);
+  }catch(e){
+    console.error('P6 request detail',e);
+    res.status(500).json({error:'No se pudo cargar el detalle de la solicitud.'});
+  }
+});
+// ANDON_R187_P61_ADMIN
+app.get('/api/r187/admin-open-p61',requireAuth,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        r.id,r.source,r.requested_by,r.requester_area,r.support_location,
+        r.department,r.category,r.notes,r.status,r.requested_at,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        t.id ticket_id,t.ticket_number,t.status ticket_status,t.assigned_to,
+        COALESCE(u.full_name,u.username) assigned_name
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN users u ON u.id=t.assigned_to
+      WHERE r.source='administrative'
+        AND r.status IN ('unassigned','assigned','in_progress','waiting','escalated')
+        AND COALESCE(t.status,r.status) NOT IN ('resolved','closed','cancelled')
+      ORDER BY r.requested_at DESC
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('P6.1 admin-open',e);
+    res.status(500).json({error:'No se pudieron cargar las solicitudes administrativas.'});
+  }
+});
+
+app.get('/api/r187/requests/:id/detail-p61',requireAuth,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        r.*,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        t.id ticket_id,t.ticket_number,t.status ticket_status,t.assigned_to,t.assigned_at,
+        COALESCE(u.full_name,u.username) assigned_name
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN users u ON u.id=t.assigned_to
+      WHERE r.id=$1
+      LIMIT 1
+    `,[req.params.id]);
+    if(!rows[0])return res.status(404).json({error:'Solicitud no encontrada.'});
+    res.json(rows[0]);
+  }catch(e){
+    console.error('P6.1 detail',e);
+    res.status(500).json({error:'No se pudo cargar el detalle.'});
+  }
+});
 app.get('/api/categories',async(req,res)=>{
   const department=String(req.query.department||'').toLowerCase();
   if(!(await departmentValid(department))) return res.status(400).json({error:'Departamento inválido'});
@@ -209,13 +515,13 @@ app.get('/api/categories',async(req,res)=>{
 
 app.get('/api/stations/:code',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
+  if(!found) return res.status(404).json({error:'Estación no encontrada'});
   res.json(found.station);
 });
 
 app.get('/api/stations/:code/requests',async(req,res)=>{
   const found=await resolveStation(req.params.code);
-  if(!found) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
+  if(!found) return res.status(404).json({error:'Estación no encontrada'});
   const {rows}=await pool.query(`
     SELECT r.id,r.department,r.category,r.status,r.requested_at,r.assigned_at,r.attended_at,r.resolved_at,r.notes,
            t.id ticket_id,t.ticket_number,t.status ticket_status,t.assigned_to,t.auto_close_at,
@@ -224,7 +530,7 @@ app.get('/api/stations/:code/requests',async(req,res)=>{
     LEFT JOIN tickets t ON t.request_id=r.id
     LEFT JOIN users u ON u.id=t.assigned_to
     LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
-    WHERE r.station_id=$1 AND r.status = ANY($2::text[])
+    WHERE r.station_id=$1 AND r.status = ANY($2::text[]) AND COALESCE(t.status,r.status) NOT IN ('resolved','closed','cancelled') AND COALESCE(t.status,r.status) NOT IN ('resolved','closed','cancelled')
     ORDER BY r.requested_at`,[found.station.id,OPEN_REQUEST_STATUSES]);
   res.json(rows.map(x=>({...x,status:x.ticket_status||x.status})));
 });
@@ -232,20 +538,28 @@ app.get('/api/stations/:code/requests',async(req,res)=>{
 app.post('/api/requests',async(req,res)=>{
   const {stationCode,department,category,requestedBy,notes}=req.body;
   if(!(await departmentValid(department))) return res.status(400).json({error:'Departamento inválido'});
-  if(!category) return res.status(400).json({error:'Selecciona una categorÃ­a.'});
+  if(!category) return res.status(400).json({error:'Selecciona una categoría.'});
   const normalizedCategory=String(category).toLowerCase();
   const cleanNotes=String(notes||'').trim().slice(0,500);
   const found=await resolveStation(stationCode);
-  if(!found || !found.station.enabled) return res.status(404).json({error:'EstaciÃ³n no encontrada'});
+  if(!found || !found.station.enabled) return res.status(404).json({error:'Estación no encontrada'});
   const valid=(await pool.query(`SELECT code,label,icon FROM support_categories WHERE department=$1 AND code=$2 AND enabled=TRUE`,[department,normalizedCategory])).rows[0];
-  if(!valid) return res.status(400).json({error:'CategorÃ­a invÃ¡lida para esta Ã¡rea.'});
+  if(!valid) return res.status(400).json({error:'Categoría inválida para esta área.'});
 
-  // Bloquear sÃ³lo mientras exista una incidencia ACTIVA; una resuelta permite un nuevo evento independiente.
-  const active=(await pool.query(`SELECT id,status FROM support_requests WHERE station_id=$1 AND department=$2 AND status IN ('unassigned','assigned','in_progress','waiting','escalated') ORDER BY requested_at DESC LIMIT 1`,[found.station.id,department])).rows[0];
-  if(active) return res.status(409).json({error:'Ya existe una incidencia activa de esta Ã¡rea para este equipo.'});
+  // Bloquear sólo mientras exista una incidencia ACTIVA; una resuelta permite un nuevo evento independiente.
+  const active=(await pool.query(`SELECT r.id,r.status
+FROM support_requests r
+LEFT JOIN tickets t ON t.request_id=r.id
+WHERE r.station_id=$1
+  AND r.department=$2
+  AND r.status IN ('unassigned','assigned','in_progress','waiting','escalated')
+  AND COALESCE(t.status,'') NOT IN ('resolved','closed','cancelled')
+ORDER BY r.requested_at DESC
+LIMIT 1`,[found.station.id,department])).rows[0];
+  if(active) return res.status(409).json({error:'Ya existe una incidencia activa de esta área para este equipo.'});
 
   const sla=await pickSla(department,normalizedCategory,found.station.id);
-  const q=await pool.query(`INSERT INTO support_requests(station_id,department,category,status,requested_by,notes,sla_policy_id) VALUES($1,$2,$3,'unassigned',$4,$5,$6) RETURNING *`,[found.station.id,department,normalizedCategory,requestedBy||'Operador de estaciÃ³n',cleanNotes||null,sla?.id||null]);
+  const q=await pool.query(`INSERT INTO support_requests(station_id,department,category,status,requested_by,notes,sla_policy_id) VALUES($1,$2,$3,'unassigned',$4,$5,$6) RETURNING *`,[found.station.id,department,normalizedCategory,requestedBy||'Operador de estación',cleanNotes||null,sla?.id||null]);
   io.emit('request:changed',{action:'created',id:q.rows[0].id,stationCode:found.station.code,department,category:normalizedCategory});
   res.status(201).json({...q.rows[0],category_label:valid.label,category_icon:valid.icon});
 });
@@ -302,7 +616,7 @@ app.get('/api/requests-list',requireAuth,async(req,res)=>{
   const dept=userDepartment(user);
   const params=dept?[dept]:[];
   const whereDept=dept?`AND r.department=$1`:'';
-  // Solicitudes = sÃ³lo pool SIN ASIGNAR.
+  // Solicitudes = sólo pool SIN ASIGNAR.
   const {rows}=await pool.query(`
     SELECT r.*,s.code,s.label station_name,g.name group_name,g.code group_code,COALESCE(ac.label,c.label,r.category) category_label,c.icon category_icon,
            sp.name sla_name,COALESCE(sp.response_minutes,5) response_minutes,COALESCE(sp.resolution_minutes,60) resolution_minutes,
@@ -347,7 +661,7 @@ app.post('/api/requests/:id/assign',requireAuth,async(req,res)=>{
       FOR UPDATE OF r`,[req.params.id])).rows[0];
 
     if(!check){await client.query('ROLLBACK');return res.status(404).json({error:'Solicitud no encontrada'});}
-    if(!canAct(req.session.user,check.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta Ã¡rea'});}
+    if(!canAct(req.session.user,check.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta área'});}
     if(check.status!=='unassigned'){await client.query('ROLLBACK');return res.status(409).json({error:'La solicitud ya fue asignada'});}
 
     const actor=req.session.user;
@@ -471,7 +785,7 @@ app.patch('/api/tickets/:id/assignee',requireAuth,async(req,res)=>{
 app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
   const desired=String(req.body.status||'').trim();
   const allowed=['assigned','in_progress','waiting','escalated','resolved','closed'];
-  if(!allowed.includes(desired))return res.status(400).json({error:'Estado invÃ¡lido'});
+  if(!allowed.includes(desired))return res.status(400).json({error:'Estado inválido'});
 
   const client=await pool.connect();
   try{
@@ -489,8 +803,8 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
       FOR UPDATE OF t`,[req.params.id])).rows[0];
 
     if(!t){await client.query('ROLLBACK');return res.status(404).json({error:'Ticket no encontrado'});}
-    if(!canAct(req.session.user,t.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta Ã¡rea'});}
-    if(['closed','cancelled'].includes(t.status)){await client.query('ROLLBACK');return res.status(409).json({error:'El ticket ya estÃ¡ cerrado'});}
+    if(!canAct(req.session.user,t.department)){await client.query('ROLLBACK');return res.status(403).json({error:'No autorizado para esta área'});}
+    if(['closed','cancelled'].includes(t.status)){await client.query('ROLLBACK');return res.status(409).json({error:'El ticket ya está cerrado'});}
 
     const transitions={
       assigned:['in_progress','waiting','escalated','resolved'],
@@ -501,10 +815,10 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
     };
     if(!(transitions[t.status]||[]).includes(desired)){
       await client.query('ROLLBACK');
-      return res.status(409).json({error:`TransiciÃ³n no permitida: ${ticketStateLabel(t.status)} â†’ ${ticketStateLabel(desired)}`});
+      return res.status(409).json({error:`Transición no permitida: ${ticketStateLabel(t.status)} â†’ ${ticketStateLabel(desired)}`});
     }
     if(desired==='closed'&&!isManager(req.session.user)){
-      await client.query('ROLLBACK');return res.status(403).json({error:'SÃ³lo Admin/Superadmin puede cerrar manualmente'});
+      await client.query('ROLLBACK');return res.status(403).json({error:'Sólo Admin/Superadmin puede cerrar manualmente'});
     }
 
     const textReason=String(req.body.reason||'').trim();
@@ -513,8 +827,8 @@ app.patch('/api/tickets/:id/status',requireAuth,async(req,res)=>{
 
     if(desired==='waiting'&&!textReason){await client.query('ROLLBACK');return res.status(400).json({error:'Indica el motivo de espera'});}
     if(desired==='escalated'&&!textReason){await client.query('ROLLBACK');return res.status(400).json({error:'Indica el motivo del escalamiento'});}
-    if(desired==='resolved'&&!solution){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la soluciÃ³n aplicada'});}
-    if(desired==='closed'&&!closureComment){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la soluciÃ³n/comentario final de cierre'});}
+    if(desired==='resolved'&&!solution){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la solución aplicada'});}
+    if(desired==='closed'&&!closureComment){await client.query('ROLLBACK');return res.status(400).json({error:'Captura la solución/comentario final de cierre'});}
 
     let totalWait=Number(t.total_wait_seconds||0);
     let resolutionDue=t.resolution_due_at ? new Date(t.resolution_due_at) : null;
@@ -608,7 +922,7 @@ app.get('/api/history',requireAuth,async(req,res)=>{
 });
 
 // ============================================================
-// REPORTES DINÃMICOS
+// REPORTES DINÁMICOS
 // ============================================================
 app.get('/api/report-filters',requireAuth,async(req,res)=>{
   const dept=userDepartment(req.session.user);
@@ -701,7 +1015,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
         s.label station_name,
         s.group_id,
         COALESCE(g.name,rg.name,r.support_location,'Sin grupo') group_name,
-        COALESCE(c.label,r.category,'Sin categorÃ­a') category_label,
+        COALESCE(c.label,r.category,'Sin categoría') category_label,
         t.id ticket_id,
         t.ticket_number,
         t.status ticket_status,
@@ -803,7 +1117,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
     for(const x of rows){
       const met=resolutionMet(x);
       if(met===null)continue;
-      const k=x.category_label||'Sin categorÃ­a';
+      const k=x.category_label||'Sin categoría';
       if(!categoryMap.has(k))categoryMap.set(k,{label:k,measured:0,met:0});
       const o=categoryMap.get(k);
       o.measured++;
@@ -852,7 +1166,7 @@ app.get('/api/reports',requireAuth,async(req,res)=>{
       const o=stationMap.get(k);
       o.total++;
       const z=resolutionSeconds(x); if(z!==null)o.resolutions.push(z);
-      const c=x.category_label||'Sin categorÃ­a';
+      const c=x.category_label||'Sin categoría';
       o.cats.set(c,(o.cats.get(c)||0)+1);
     }
     const recurrent=[...stationMap.values()].map(o=>{
@@ -946,7 +1260,7 @@ app.post('/api/admin/departments',requireSuperadmin,async(req,res)=>{const name=
 app.patch('/api/admin/departments/:id',requireSuperadmin,async(req,res)=>{const d=(await pool.query(`SELECT * FROM support_departments WHERE id=$1`,[req.params.id])).rows[0];if(!d)return res.status(404).json({error:'Área no encontrada'});const name=String(req.body.name||d.name).trim();const q=(await pool.query(`UPDATE support_departments SET name=$1,enabled=COALESCE($2,enabled),updated_at=NOW() WHERE id=$3 RETURNING *`,[name,req.body.enabled,req.params.id])).rows[0];io.emit('data:changed',{type:'departments'});res.json(q)});
 
 // ============================================================
-// ADMIN: GRUPOS / EQUIPOS CON CÃ“DIGO AUTOMÃTICO
+// ADMIN: GRUPOS / EQUIPOS CON CÃ“DIGO AUTOMÁTICO
 // ============================================================
 app.get('/api/admin/groups',requireManager,async(req,res)=>{
   const plants=await pool.query(`SELECT * FROM plants WHERE archived_at IS NULL ORDER BY sort_order,name`);
@@ -978,7 +1292,7 @@ app.patch('/api/admin/groups/:id',requireManager,async(req,res)=>{
     const plant=(await client.query(`SELECT * FROM plants WHERE id=$1 AND archived_at IS NULL`,[plantId])).rows[0];
     if(!plant){await client.query('ROLLBACK');return res.status(400).json({error:'Planta inválida'});}
     if(newName!==g.name){newCode=slug(newName);const clash=(await client.query(`SELECT 1 FROM production_groups WHERE code=$1 AND id<>$2`,[newCode,g.id])).rowCount;if(clash)newCode=`${slug(plant.code)}-${newCode}`.slice(0,30);}
-    if(!newName||!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de grupo invÃ¡lido'});}
+    if(!newName||!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de grupo inválido'});}
     if(newName!==g.name || newCode!==g.code){
       const sts=(await client.query(`SELECT * FROM stations WHERE group_id=$1 AND archived_at IS NULL FOR UPDATE`,[g.id])).rows;
       for(const st of sts){
@@ -992,7 +1306,7 @@ app.patch('/api/admin/groups/:id',requireManager,async(req,res)=>{
     }
     const q=(await client.query(`UPDATE production_groups SET name=$1,code=$2,enabled=COALESCE($3,enabled),plant_id=$4,updated_at=NOW() WHERE id=$5 RETURNING *`,[newName,newCode,enabled,plantId,g.id])).rows[0];
     await client.query('COMMIT');io.emit('data:changed',{type:'groups'});res.json(q);
-  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return res.status(409).json({error:'El nuevo nombre genera un cÃ³digo duplicado'});console.error(e);res.status(500).json({error:'No se pudo renombrar grupo/equipos'});}finally{client.release();}
+  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return res.status(409).json({error:'El nuevo nombre genera un código duplicado'});console.error(e);res.status(500).json({error:'No se pudo renombrar grupo/equipos'});}finally{client.release();}
 });
 
 app.delete('/api/admin/groups/:id',requireManager,async(req,res)=>{
@@ -1004,7 +1318,7 @@ app.delete('/api/admin/groups/:id',requireManager,async(req,res)=>{
 app.post('/api/admin/stations',requireManager,async(req,res)=>{
   const groupId=Number(req.body.groupId); const name=String(req.body.name||'').trim(); if(!groupId||!name)return res.status(400).json({error:'Grupo y nombre son requeridos'});
   const g=(await pool.query(`SELECT * FROM production_groups WHERE id=$1 AND archived_at IS NULL`,[groupId])).rows[0]; if(!g)return res.status(404).json({error:'Grupo no encontrado'});
-  const code=stationCodeFromNames(g.code,name); if(!code)return res.status(400).json({error:'Nombre de equipo invÃ¡lido'});
+  const code=stationCodeFromNames(g.code,name); if(!code)return res.status(400).json({error:'Nombre de equipo inválido'});
   const next=(await pool.query(`SELECT COALESCE(MAX(station_no),0)+1 n FROM stations WHERE group_id=$1`,[groupId])).rows[0].n;
   const free=(await pool.query(`
     SELECT rr.r,cc.c FROM generate_series(1,2) AS rr(r) CROSS JOIN generate_series(1,20) AS cc(c)
@@ -1021,7 +1335,7 @@ app.patch('/api/admin/stations/:id',requireManager,async(req,res)=>{
     const groupId=Number(req.body.groupId||s.group_id); const g=(await client.query(`SELECT * FROM production_groups WHERE id=$1 AND archived_at IS NULL`,[groupId])).rows[0]; if(!g){await client.query('ROLLBACK');return res.status(404).json({error:'Grupo no encontrado'});}
     const name=String(req.body.name||s.label).trim(); if(!name){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo requerido'});}
     const newCode=stationCodeFromNames(g.code,name); const enabled=req.body.enabled;
-    if(!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo invÃ¡lido'});}
+    if(!newCode){await client.query('ROLLBACK');return res.status(400).json({error:'Nombre de equipo inválido'});}
     if(newCode!==s.code) await client.query(`INSERT INTO station_aliases(station_id,old_code) VALUES($1,$2) ON CONFLICT(old_code) DO NOTHING`,[s.id,s.code]);
     const q=(await client.query(`UPDATE stations SET label=$1,code=$2,group_id=$3,line_no=$4,enabled=COALESCE($5,enabled),updated_at=NOW() WHERE id=$6 RETURNING *`,[name,newCode,groupId,g.legacy_line_no,enabled,s.id])).rows[0];
     await client.query('COMMIT');io.emit('data:changed',{type:'stations',stationCode:q.code});res.json(q);
@@ -1072,9 +1386,9 @@ app.get('/api/admin/users',requireManager,async(req,res)=>{
 });
 app.post('/api/admin/users',requireManager,async(req,res)=>{
   const username=String(req.body.username||'').trim();const fullName=String(req.body.fullName||'').trim();const role=String(req.body.role||'engineer');const department=['engineer','supervisor'].includes(role)?String(req.body.department||''):null;const password=String(req.body.password||'');
-  if(!username||!fullName||password.length<6)return res.status(400).json({error:'Usuario, nombre y contraseÃ±a (mÃ­n. 6) requeridos'});
+  if(!username||!fullName||password.length<6)return res.status(400).json({error:'Usuario, nombre y contraseña (mín. 6) requeridos'});
   if(!['admin','engineer','supervisor','superadmin'].includes(role))return res.status(400).json({error:'Rol inválido'});
-  if(role==='superadmin' && req.session.user.role!=='superadmin')return res.status(403).json({error:'SÃ³lo Superadmin puede crear otro Superadmin'});
+  if(role==='superadmin' && req.session.user.role!=='superadmin')return res.status(403).json({error:'Sólo Superadmin puede crear otro Superadmin'});
   if(['engineer','supervisor'].includes(role)&&!(await departmentValid(department)))return res.status(400).json({error:'Selecciona un área válida'});
   try{const hash=await bcrypt.hash(password,10);const q=(await pool.query(`INSERT INTO users(username,password_hash,full_name,role,department,active) VALUES($1,$2,$3,$4,$5,TRUE) RETURNING id,username,full_name,role,department,active`,[username,hash,fullName,role,department])).rows[0];res.status(201).json(q);}catch(e){if(e.code==='23505')return res.status(409).json({error:'Usuario duplicado'});throw e;}
 });
@@ -1088,19 +1402,1027 @@ app.patch('/api/admin/users/:id',requireManager,async(req,res)=>{
 app.post('/api/admin/users/:id/reset-password',requireManager,async(req,res)=>{
   const target=(await pool.query(`SELECT * FROM users WHERE id=$1 AND deleted_at IS NULL`,[req.params.id])).rows[0];if(!target)return res.status(404).json({error:'Usuario no encontrado'});
   if(target.role==='superadmin'&&req.session.user.role!=='superadmin')return res.status(403).json({error:'Admin no puede restablecer al Superadmin'});
-  const password=String(req.body.password||'');if(password.length<6)return res.status(400).json({error:'ContraseÃ±a mÃ­nimo 6 caracteres'});const hash=await bcrypt.hash(password,10);await pool.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2`,[hash,target.id]);res.json({ok:true});
+  const password=String(req.body.password||'');if(password.length<6)return res.status(400).json({error:'Contraseña mínimo 6 caracteres'});const hash=await bcrypt.hash(password,10);await pool.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2`,[hash,target.id]);res.json({ok:true});
 });
 app.delete('/api/admin/users/:id',requireManager,async(req,res)=>{
   const target=(await pool.query(`SELECT * FROM users WHERE id=$1 AND deleted_at IS NULL`,[req.params.id])).rows[0];if(!target)return res.status(404).json({error:'Usuario no encontrado'});
   if(target.role==='superadmin')return res.status(403).json({error:'El usuario Superadmin no se puede eliminar'});
-  if(Number(target.id)===Number(req.session.user.id))return res.status(409).json({error:'No puedes eliminar tu propia sesiÃ³n'});
+  if(Number(target.id)===Number(req.session.user.id))return res.status(409).json({error:'No puedes eliminar tu propia sesión'});
   await pool.query(`UPDATE users SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE id=$1`,[target.id]);res.json({ok:true});
 });
 
+/* ANDON_R187_P22_SESSION_HEARTBEAT */
+const USER_SESSION_STALE_MS = 60*1000;
+
+async function cleanupStaleUserSessions(){
+  try{
+    await pool.query(`
+      DELETE FROM active_user_sessions
+      WHERE expires_at<=NOW()
+         OR (closing_at IS NOT NULL AND closing_at < NOW() - INTERVAL '20 seconds')
+         OR last_seen_at < NOW() - INTERVAL '60 seconds'
+    `);
+  }catch(e){
+    console.error('R1.8.7 P2.2 cleanup stale sessions:',e);
+  }
+}
+setInterval(cleanupStaleUserSessions,15000);
+setTimeout(cleanupStaleUserSessions,3000);
+
+app.post('/api/session/heartbeat',async(req,res)=>{
+  try{
+    const userId=req.session?.user?.id;
+    const token=req.session?.sessionToken;
+    if(!userId || !token) return res.status(401).json({ok:false});
+
+    const q=await pool.query(`
+      UPDATE active_user_sessions
+      SET last_seen_at=NOW(),
+          closing_at=NULL
+      WHERE user_id=$1
+        AND session_token=$2
+        AND expires_at>NOW()
+      RETURNING user_id
+    `,[userId,token]);
+
+    if(!q.rowCount) return res.status(401).json({ok:false});
+    res.json({ok:true});
+  }catch(e){
+    console.error('R1.8.7 P2.2 heartbeat:',e);
+    res.status(500).json({ok:false});
+  }
+});
+
+app.post('/api/session/release',async(req,res)=>{
+  try{
+    const userId=req.session?.user?.id;
+    const token=req.session?.sessionToken;
+    if(userId && token){
+      await pool.query(`
+        UPDATE active_user_sessions
+        SET closing_at=NOW()
+        WHERE user_id=$1 AND session_token=$2
+      `,[userId,token]);
+    }
+    res.status(204).end();
+  }catch(e){
+    console.error('R1.8.7 P2.5 release-intent:',e);
+    res.status(204).end();
+  }
+});
+/* ANDON_R187_SINGLE_SESSION_ADMIN */
+app.get('/api/admin/active-sessions',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        s.user_id,
+        u.username,
+        u.full_name,
+        u.role,
+        u.department,
+        s.login_at,
+        s.last_seen_at,
+        s.expires_at,
+        s.ip_address,
+        s.user_agent
+      FROM active_user_sessions s
+      JOIN users u ON u.id=s.user_id
+      WHERE s.expires_at>NOW()
+      ORDER BY s.login_at DESC
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 active sessions:',e);
+    res.status(500).json({error:'No se pudieron consultar las sesiones activas.'});
+  }
+});
+
+app.post('/api/admin/users/:id/release-session',requireManager,async(req,res)=>{
+  try{
+    const targetId=Number(req.params.id);
+    if(!targetId) return res.status(400).json({error:'Usuario inválido'});
+    if(Number(req.session.user.id)===targetId){
+      return res.status(409).json({error:'No puedes liberar tu propia sesión desde administración. Usa Cerrar sesión.'});
+    }
+
+    const q=await pool.query(`
+      DELETE FROM active_user_sessions
+      WHERE user_id=$1
+      RETURNING user_id
+    `,[targetId]);
+
+    io.emit('data:changed',{type:'sessions',userId:targetId});
+    res.json({ok:true,released:q.rowCount>0});
+  }catch(e){
+    console.error('R1.8.7 release session:',e);
+    res.status(500).json({error:'No se pudo liberar la sesión del usuario.'});
+  }
+});
+/* ANDON_R187_P3_PLANT_USER_AREA */
+async function r187PlantExists(id,client=pool){
+  const plantId=Number(id||0);
+  if(!plantId) return false;
+  const q=await client.query(`SELECT id FROM plants WHERE id=$1 LIMIT 1`,[plantId]);
+  return !!q.rows[0];
+}
+
+app.get('/api/admin/plants-for-users',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT id,code,name
+      FROM plants
+      ORDER BY name,code,id
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3 plants-for-users:',e);
+    res.status(500).json({error:'No se pudieron cargar las plantas.'});
+  }
+});
+
+app.get('/api/admin/users-with-plants',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        u.id,
+        u.username,
+        u.full_name,
+        u.role,
+        u.department,
+        u.active,
+        u.plant_id,
+        p.code AS plant_code,
+        p.name AS plant_name,
+        CASE
+          WHEN u.role='superadmin' AND u.plant_id IS NULL THEN 'Todas'
+          ELSE COALESCE(p.name,p.code,'Sin asignar')
+        END AS plant_label
+      FROM users u
+      LEFT JOIN plants p ON p.id=u.plant_id
+      WHERE u.deleted_at IS NULL
+      ORDER BY
+        CASE WHEN u.role='superadmin' THEN 0 ELSE 1 END,
+        COALESCE(p.name,p.code,''),
+        u.department,
+        u.full_name,
+        u.username
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3 users-with-plants:',e);
+    res.status(500).json({error:'No se pudieron cargar usuarios con planta.'});
+  }
+});
+
+app.patch('/api/admin/users/:id/plant',requireManager,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    const targetId=Number(req.params.id);
+    if(!targetId) return res.status(400).json({error:'Usuario inválido'});
+
+    await client.query('BEGIN');
+
+    const target=(await client.query(`
+      SELECT id,username,full_name,role,department,plant_id
+      FROM users
+      WHERE id=$1 AND deleted_at IS NULL
+      FOR UPDATE
+    `,[targetId])).rows[0];
+
+    if(!target){
+      await client.query('ROLLBACK');
+      return res.status(404).json({error:'Usuario no encontrado'});
+    }
+
+    let plantId=Number(req.body.plantId||0)||null;
+
+    // Superadmin con NULL representa alcance global / Todas.
+    if(target.role==='superadmin'){
+      plantId=null;
+    }else{
+      if(!plantId){
+        await client.query('ROLLBACK');
+        return res.status(400).json({error:'Selecciona una planta para este usuario.'});
+      }
+      if(!(await r187PlantExists(plantId,client))){
+        await client.query('ROLLBACK');
+        return res.status(400).json({error:'La planta seleccionada no existe.'});
+      }
+    }
+
+    const q=(await client.query(`
+      UPDATE users
+      SET plant_id=$1,updated_at=NOW()
+      WHERE id=$2
+      RETURNING id,username,full_name,role,department,active,plant_id
+    `,[plantId,targetId])).rows[0];
+
+    const plant=plantId
+      ? (await client.query(`SELECT id,code,name FROM plants WHERE id=$1`,[plantId])).rows[0]
+      : null;
+
+    await client.query('COMMIT');
+
+    // Si el usuario modificado es el actual, refresca su alcance en esta sesion.
+    if(Number(req.session?.user?.id)===targetId){
+      req.session.user.plantId=plantId;
+    }
+
+    io.emit('data:changed',{type:'users',userId:targetId,plantId});
+    res.json({
+      ...q,
+      plant_code:plant?.code||null,
+      plant_name:plant?.name||null,
+      plant_label:target.role==='superadmin'&&!plantId?'Todas':(plant?.name||plant?.code||'Sin asignar')
+    });
+  }catch(e){
+    try{await client.query('ROLLBACK')}catch{}
+    console.error('R1.8.7 P3 user plant:',e);
+    res.status(500).json({error:'No se pudo actualizar la planta del usuario.'});
+  }finally{
+    client.release();
+  }
+});
+
+app.get('/api/admin/support-areas-with-plants',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        a.*,
+        p.code AS plant_code,
+        p.name AS plant_name
+      FROM support_areas a
+      LEFT JOIN plants p ON p.id=a.plant_id
+      ORDER BY COALESCE(p.name,p.code,''),a.name
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3 support areas:',e);
+    res.status(500).json({error:'No se pudieron cargar las áreas con planta.'});
+  }
+});
+
+app.patch('/api/admin/support-areas/:id/plant',requireManager,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    const areaId=Number(req.params.id);
+    const plantId=Number(req.body.plantId||0)||null;
+    if(!areaId) return res.status(400).json({error:'Área inválida'});
+    if(plantId && !(await r187PlantExists(plantId,client))){
+      return res.status(400).json({error:'La planta seleccionada no existe.'});
+    }
+    const q=(await client.query(`
+      UPDATE support_areas
+      SET plant_id=$1
+      WHERE id=$2
+      RETURNING *
+    `,[plantId,areaId])).rows[0];
+    if(!q) return res.status(404).json({error:'Área no encontrada'});
+    io.emit('data:changed',{type:'support_areas',areaId,plantId});
+    res.json(q);
+  }catch(e){
+    console.error('R1.8.7 P3 area plant:',e);
+    res.status(500).json({error:'No se pudo actualizar la planta del área.'});
+  }finally{
+    client.release();
+  }
+});
 // ============================================================
+/* ANDON_R187_P31_USERS_AREAS_UI_API */
+app.get('/api/r187/admin/plants',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`SELECT id,code,name FROM plants ORDER BY name,code,id`);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3.1 plants',e);
+    res.status(500).json({error:'No se pudieron cargar las plantas.'});
+  }
+});
+
+app.get('/api/r187/admin/departments',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT code,COALESCE(name,code) name
+      FROM support_departments
+      WHERE COALESCE(enabled,TRUE)=TRUE
+      ORDER BY COALESCE(name,code),code
+    `);
+    res.json(rows);
+  }catch(e){
+    try{
+      const {rows}=await pool.query(`
+        SELECT DISTINCT department code,department name
+        FROM users
+        WHERE department IS NOT NULL AND trim(department)<>''
+        ORDER BY department
+      `);
+      res.json(rows);
+    }catch(e2){
+      console.error('R1.8.7 P3.1 departments',e2);
+      res.status(500).json({error:'No se pudieron cargar las áreas/departamentos.'});
+    }
+  }
+});
+
+app.get('/api/r187/admin/users',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        u.id,u.username,u.full_name,u.role,u.department,u.active,u.plant_id,
+        p.code plant_code,p.name plant_name,
+        CASE WHEN u.role='superadmin' AND u.plant_id IS NULL
+             THEN 'Todas'
+             ELSE COALESCE(p.name,p.code,'Sin asignar') END plant_label,
+        CASE WHEN aus.user_id IS NOT NULL AND aus.expires_at>NOW() THEN TRUE ELSE FALSE END session_active,
+        aus.login_at session_login_at,
+        aus.last_seen_at session_last_seen_at
+      FROM users u
+      LEFT JOIN plants p ON p.id=u.plant_id
+      LEFT JOIN active_user_sessions aus ON aus.user_id=u.id
+      WHERE u.deleted_at IS NULL
+      ORDER BY
+        CASE WHEN u.role='superadmin' THEN 0 ELSE 1 END,
+        COALESCE(p.name,p.code,''),
+        COALESCE(u.department,''),
+        u.full_name,u.username
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3.1 users',e);
+    res.status(500).json({error:'No se pudieron cargar los usuarios.'});
+  }
+});
+
+app.post('/api/r187/admin/users',requireManager,async(req,res)=>{
+  try{
+    const username=String(req.body.username||'').trim();
+    const fullName=String(req.body.fullName||'').trim();
+    const role=String(req.body.role||'engineer').trim();
+    const department=String(req.body.department||'').trim()||null;
+    const password=String(req.body.password||'');
+    let plantId=Number(req.body.plantId||0)||null;
+
+    if(!username) return res.status(400).json({error:'Usuario requerido'});
+    if(!fullName) return res.status(400).json({error:'Nombre requerido'});
+    if(password.length<6) return res.status(400).json({error:'Contraseña mínimo 6 caracteres'});
+    if(role!=='superadmin' && !plantId) return res.status(400).json({error:'Selecciona una planta'});
+    if(role==='superadmin') plantId=null;
+
+    if(plantId){
+      const p=(await pool.query(`SELECT id FROM plants WHERE id=$1`,[plantId])).rows[0];
+      if(!p) return res.status(400).json({error:'Planta inválida'});
+    }
+
+    const hash=await bcrypt.hash(password,10);
+    const q=(await pool.query(`
+      INSERT INTO users(username,full_name,password_hash,role,department,active,plant_id)
+      VALUES($1,$2,$3,$4,$5,TRUE,$6)
+      RETURNING id,username,full_name,role,department,active,plant_id
+    `,[username,fullName,hash,role,department,plantId])).rows[0];
+
+    io.emit('data:changed',{type:'users',userId:q.id});
+    res.status(201).json(q);
+  }catch(e){
+    if(e.code==='23505') return res.status(409).json({error:'Ese usuario ya existe.'});
+    console.error('R1.8.7 P3.1 create user',e);
+    res.status(500).json({error:'No se pudo crear el usuario.'});
+  }
+});
+
+app.patch('/api/r187/admin/users/:id',requireManager,async(req,res)=>{
+  try{
+    const id=Number(req.params.id);
+    const target=(await pool.query(`SELECT id,role FROM users WHERE id=$1 AND deleted_at IS NULL`,[id])).rows[0];
+    if(!target) return res.status(404).json({error:'Usuario no encontrado'});
+
+    const role=String(req.body.role||target.role).trim();
+    const department=req.body.department===undefined?undefined:(String(req.body.department||'').trim()||null);
+    let plantId=req.body.plantId===undefined?undefined:(Number(req.body.plantId||0)||null);
+
+    if(role==='superadmin') plantId=null;
+    if(role!=='superadmin' && req.body.plantId!==undefined && !plantId)
+      return res.status(400).json({error:'El usuario debe tener una planta asignada.'});
+
+    if(plantId){
+      const p=(await pool.query(`SELECT id FROM plants WHERE id=$1`,[plantId])).rows[0];
+      if(!p) return res.status(400).json({error:'Planta inválida'});
+    }
+
+    const q=(await pool.query(`
+      UPDATE users SET
+        department=CASE WHEN $1::boolean THEN $2 ELSE department END,
+        plant_id=CASE WHEN $3::boolean THEN $4 ELSE plant_id END,
+        updated_at=NOW()
+      WHERE id=$5
+      RETURNING id,username,full_name,role,department,active,plant_id
+    `,[
+      req.body.department!==undefined,department,
+      req.body.plantId!==undefined || role==='superadmin',plantId,
+      id
+    ])).rows[0];
+
+    if(Number(req.session?.user?.id)===id) req.session.user.plantId=q.plant_id||null;
+    io.emit('data:changed',{type:'users',userId:id});
+    res.json(q);
+  }catch(e){
+    console.error('R1.8.7 P3.1 update user',e);
+    res.status(500).json({error:'No se pudo actualizar el usuario.'});
+  }
+});
+
+app.get('/api/r187/admin/areas',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT a.id,a.name,a.enabled,a.sort_order
+      FROM support_areas a
+      ORDER BY a.sort_order,a.name
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P3.1 areas',e);
+    res.status(500).json({error:'No se pudieron cargar las áreas.'});
+  }
+});
+
+app.post('/api/r187/admin/areas',requireManager,async(req,res)=>{
+  try{
+    const name=String(req.body.name||'').trim();
+    const plantId=Number(req.body.plantId||0)||null;
+    if(!name) return res.status(400).json({error:'Nombre del área requerido'});
+    if(!plantId) return res.status(400).json({error:'Selecciona una planta'});
+
+    const p=(await pool.query(`SELECT id FROM plants WHERE id=$1`,[plantId])).rows[0];
+    if(!p) return res.status(400).json({error:'Planta inválida'});
+
+    const exists=(await pool.query(`
+      SELECT id FROM support_areas
+      WHERE plant_id=$1 AND lower(trim(name))=lower(trim($2))
+      LIMIT 1
+    `,[plantId,name])).rows[0];
+    if(exists) return res.status(409).json({error:'Esa área ya existe en la planta seleccionada.'});
+
+    const max=(await pool.query(`SELECT COALESCE(MAX(sort_order),0)+10 n FROM support_areas`)).rows[0].n;
+    const q=(await pool.query(`
+      INSERT INTO support_areas(name,enabled,sort_order,plant_id)
+      VALUES($1,TRUE,$2,$3)
+      RETURNING *
+    `,[name,max,plantId])).rows[0];
+
+    io.emit('data:changed',{type:'support_areas',areaId:q.id});
+    res.status(201).json(q);
+  }catch(e){
+    if(e.code==='23505') return res.status(409).json({error:'Esa área ya existe en la planta seleccionada.'});
+    console.error('R1.8.7 P3.1 create area',e);
+    res.status(500).json({error:'No se pudo crear el área.'});
+  }
+});
+
+app.patch('/api/r187/admin/areas/:id',requireManager,async(req,res)=>{
+  try{
+    const id=Number(req.params.id);
+    const current=(await pool.query(`SELECT * FROM support_areas WHERE id=$1`,[id])).rows[0];
+    if(!current) return res.status(404).json({error:'Área no encontrada'});
+
+    const name=req.body.name===undefined?current.name:String(req.body.name||'').trim();
+    const plantId=req.body.plantId===undefined?current.plant_id:(Number(req.body.plantId||0)||null);
+    const enabled=req.body.enabled===undefined?current.enabled:!!req.body.enabled;
+
+    if(!name) return res.status(400).json({error:'Nombre del área requerido'});
+    if(!plantId) return res.status(400).json({error:'Selecciona una planta'});
+
+    const duplicate=(await pool.query(`
+      SELECT id FROM support_areas
+      WHERE id<>$1 AND plant_id=$2 AND lower(trim(name))=lower(trim($3))
+      LIMIT 1
+    `,[id,plantId,name])).rows[0];
+    if(duplicate) return res.status(409).json({error:'Esa área ya existe en la planta seleccionada.'});
+
+    const q=(await pool.query(`
+      UPDATE support_areas
+      SET name=$1,plant_id=$2,enabled=$3
+      WHERE id=$4 RETURNING *
+    `,[name,plantId,enabled,id])).rows[0];
+
+    io.emit('data:changed',{type:'support_areas',areaId:id});
+    res.json(q);
+  }catch(e){
+    console.error('R1.8.7 P3.1 update area',e);
+    res.status(500).json({error:'No se pudo actualizar el área.'});
+  }
+});
+/* ANDON_R187_P4_OPERACION_REPORTES */
+
+app.get('/api/r187/requests/:id/detail',requireAuth,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        r.*,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        t.id ticket_id,t.ticket_number,t.status ticket_status,
+        u.full_name assigned_to_name
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN users u ON u.id=t.assigned_to
+      WHERE r.id=$1
+      LIMIT 1
+    `,[req.params.id]);
+    if(!rows[0]) return res.status(404).json({error:'Solicitud no encontrada'});
+    res.json(rows[0]);
+  }catch(e){
+    console.error('R1.8.7 P4 request detail',e);
+    res.status(500).json({error:'No se pudo cargar el detalle de la solicitud.'});
+  }
+});
+
+app.get('/api/r187/requests/:id/assignees',requireManager,async(req,res)=>{
+  try{
+    const rq=(await pool.query(`SELECT id,department FROM support_requests WHERE id=$1`,[req.params.id])).rows[0];
+    if(!rq) return res.status(404).json({error:'Solicitud no encontrada'});
+
+    const {rows}=await pool.query(`
+      SELECT id,username,full_name,role,department,plant_id
+      FROM users
+      WHERE active=TRUE
+        AND deleted_at IS NULL
+        AND (
+          role IN ('superadmin','admin','manager')
+          OR (role='engineer' AND lower(COALESCE(department,''))=lower($1))
+        )
+      ORDER BY
+        CASE role WHEN 'engineer' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+        full_name,username
+    `,[rq.department]);
+
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 P4 assignees',e);
+    res.status(500).json({error:'No se pudieron cargar los usuarios disponibles.'});
+  }
+});
+
+app.post('/api/r187/requests/:id/assign-to',requireManager,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    const targetUserId=Number(req.body?.userId||0);
+    if(!targetUserId) return res.status(400).json({error:'Selecciona un usuario.'});
+
+    await client.query('BEGIN');
+
+    const check=(await client.query(`
+      SELECT
+        r.*,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        COALESCE(ac.label,c.label,r.category) category_label
+      FROM support_requests r
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      WHERE r.id=$1
+      FOR UPDATE OF r
+    `,[req.params.id])).rows[0];
+
+    if(!check){
+      await client.query('ROLLBACK');
+      return res.status(404).json({error:'Solicitud no encontrada'});
+    }
+    if(check.status!=='unassigned'){
+      await client.query('ROLLBACK');
+      return res.status(409).json({error:'La solicitud ya fue asignada o cambió de estado.'});
+    }
+
+    const target=(await client.query(`
+      SELECT id,username,full_name,role,department,plant_id
+      FROM users
+      WHERE id=$1 AND active=TRUE AND deleted_at IS NULL
+      LIMIT 1
+    `,[targetUserId])).rows[0];
+
+    if(!target){
+      await client.query('ROLLBACK');
+      return res.status(404).json({error:'Usuario destino no encontrado o inactivo.'});
+    }
+    if(target.role==='engineer' && String(target.department||'').toLowerCase()!==String(check.department||'').toLowerCase()){
+      await client.query('ROLLBACK');
+      return res.status(409).json({error:'El ingeniero seleccionado no pertenece al área de soporte de esta solicitud.'});
+    }
+
+    const sla=await pickSla(check.department,check.category,check.station_id||null,client);
+    const requestedAt=new Date(check.requested_at||Date.now());
+    const responseDueAt=new Date(requestedAt.getTime()+Number(sla?.response_minutes||5)*60000);
+    const resolutionDueAt=new Date(requestedAt.getTime()+Number(sla?.resolution_minutes||60)*60000);
+
+    const rq=(await client.query(`
+      UPDATE support_requests
+      SET status='assigned',
+          assigned_at=NOW(),
+          attended_at=COALESCE(attended_at,NOW()),
+          sla_policy_id=COALESCE(sla_policy_id,$2),
+          updated_at=NOW()
+      WHERE id=$1
+      RETURNING *
+    `,[check.id,sla?.id||null])).rows[0];
+
+    let t=(await client.query(`SELECT * FROM tickets WHERE request_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE`,[check.id])).rows[0];
+
+    if(t){
+      t=(await client.query(`
+        UPDATE tickets SET
+          department=$1,station_code=$2,station_name=$3,group_name=$4,category=$5,category_label=$6,description=$7,
+          assigned_to=$8,assigned_at=NOW(),status='assigned',sla_policy_id=$9,
+          response_due_at=$10,resolution_due_at=$11,resolved_at=NULL,resolved_by=NULL,
+          auto_close_at=NULL,closed_at=NULL,closure_type=NULL,updated_at=NOW()
+        WHERE id=$12 RETURNING *
+      `,[check.department,check.station_code,check.station_name,check.group_name,check.category,check.category_label,check.notes,
+         target.id,sla?.id||null,responseDueAt,resolutionDueAt,t.id])).rows[0];
+    }else{
+      t=(await client.query(`
+        INSERT INTO tickets(
+          request_id,department,station_code,station_name,group_name,category,category_label,description,
+          assigned_to,assigned_at,status,sla_policy_id,response_due_at,resolution_due_at,created_at,updated_at
+        )
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),'assigned',$10,$11,$12,NOW(),NOW())
+        RETURNING *
+      `,[check.id,check.department,check.station_code,check.station_name,check.group_name,check.category,check.category_label,
+         check.notes,target.id,sla?.id||null,responseDueAt,resolutionDueAt])).rows[0];
+    }
+
+    if(!t.ticket_number){
+      const prefix=check.department==='systems'?'SYS':'MNT';
+      const datePart=new Date().toISOString().slice(0,10).replace(/-/g,'');
+      const ticketNumber=`${prefix}-${datePart}-${String(t.id).padStart(5,'0')}`;
+      t=(await client.query(`UPDATE tickets SET ticket_number=$1 WHERE id=$2 RETURNING *`,[ticketNumber,t.id])).rows[0];
+    }
+
+    await logTicketEvent(
+      client,t.id,'assigned',null,'assigned',target.id,
+      `Asignado por ${req.session.user.fullName||req.session.user.username||'Administrador'}`
+    );
+
+    await client.query('COMMIT');
+
+    io.emit('request:changed',{
+      action:'assigned',id:check.id,stationCode:check.station_code,
+      department:check.department,ticketNumber:t.ticket_number
+    });
+    io.emit('ticket:changed',{
+      action:'created',ticketId:t.id,ticketNumber:t.ticket_number,department:t.department
+    });
+
+    res.json({request:rq,ticket:t,assignedTo:target});
+  }catch(e){
+    try{await client.query('ROLLBACK')}catch{}
+    console.error('R1.8.7 P4 assign-to',e);
+    res.status(500).json({error:`No se pudo asignar la solicitud${e.code?' ('+e.code+')':''}`});
+  }finally{
+    client.release();
+  }
+});
+
+/* ANDON_R187_P5_EXCEL_CHARTS */
+function r187Xml(s){
+  return String(s??'').replace(/[&<>"']/g,m=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'
+  }[m]));
+}
+
+function r187BarSvg(title,items,width=760,height=330){
+  const pad={l:170,r:40,t:58,b:35};
+  const rows=Math.max(items.length,1);
+  const innerW=width-pad.l-pad.r;
+  const rowH=(height-pad.t-pad.b)/rows;
+  const max=Math.max(1,...items.map(x=>Number(x.value)||0));
+  let body=`<rect width="${width}" height="${height}" fill="white"/>`;
+  body+=`<text x="18" y="32" font-family="Arial" font-size="22" font-weight="700" fill="#17365D">${r187Xml(title)}</text>`;
+  items.forEach((x,i)=>{
+    const y=pad.t+i*rowH;
+    const w=Math.max(2,innerW*(Number(x.value)||0)/max);
+    body+=`<text x="${pad.l-10}" y="${y+rowH*.62}" text-anchor="end" font-family="Arial" font-size="14" fill="#334155">${r187Xml(x.label)}</text>`;
+    body+=`<rect x="${pad.l}" y="${y+rowH*.22}" width="${w}" height="${rowH*.48}" rx="4" fill="#2F80ED"/>`;
+    body+=`<text x="${Math.min(pad.l+w+8,width-25)}" y="${y+rowH*.62}" font-family="Arial" font-size="13" font-weight="700" fill="#17365D">${r187Xml(x.value)}</text>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${body}</svg>`;
+}
+
+function r187LineSvg(title,items,width=760,height=330){
+  const pad={l:55,r:30,t:58,b:55};
+  const innerW=width-pad.l-pad.r;
+  const innerH=height-pad.t-pad.b;
+  const max=Math.max(1,...items.map(x=>Number(x.value)||0));
+  let body=`<rect width="${width}" height="${height}" fill="white"/>`;
+  body+=`<text x="18" y="32" font-family="Arial" font-size="22" font-weight="700" fill="#17365D">${r187Xml(title)}</text>`;
+  body+=`<line x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${height-pad.b}" stroke="#94A3B8"/>`;
+  body+=`<line x1="${pad.l}" y1="${height-pad.b}" x2="${width-pad.r}" y2="${height-pad.b}" stroke="#94A3B8"/>`;
+  const pts=[];
+  items.forEach((x,i)=>{
+    const px=pad.l+(items.length<=1?innerW/2:(innerW*i/(items.length-1)));
+    const py=pad.t+innerH-(innerH*(Number(x.value)||0)/max);
+    pts.push(`${px},${py}`);
+    body+=`<circle cx="${px}" cy="${py}" r="5" fill="#12A594"/>`;
+    body+=`<text x="${px}" y="${height-pad.b+22}" text-anchor="middle" font-family="Arial" font-size="11" fill="#475569">${r187Xml(x.label)}</text>`;
+    body+=`<text x="${px}" y="${py-10}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="#17365D">${r187Xml(x.value)}</text>`;
+  });
+  if(pts.length>1) body+=`<polyline points="${pts.join(' ')}" fill="none" stroke="#12A594" stroke-width="3"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${body}</svg>`;
+}
+
+async function r187Png(svg){
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+app.get('/api/r187/reports/excel',requireManager,async(req,res)=>{
+  try{
+    const params=[];
+    const cond=['1=1'];
+    const add=(sql,val)=>{params.push(val);cond.push(sql.replace('?',`$${params.length}`));};
+
+    if(req.query.from) add(`r.requested_at::date >= ?::date`,req.query.from);
+    if(req.query.to) add(`r.requested_at::date <= ?::date`,req.query.to);
+    if(req.query.department) add(`r.department = ?`,req.query.department);
+    if(req.query.category) add(`r.category = ?`,req.query.category);
+    if(req.query.status) add(`COALESCE(t.status,r.status) = ?`,req.query.status);
+    if(req.query.engineer) add(`t.assigned_to = ?::int`,req.query.engineer);
+    if(req.query.area) add(`COALESCE(r.requester_area,g.name,'') = ?`,req.query.area);
+
+    const {rows}=await pool.query(`
+      SELECT
+        r.id request_id,
+        t.id ticket_id,
+        t.ticket_number,
+        r.source,
+        r.requested_by,
+        r.requester_area,
+        r.support_location,
+        r.department,
+        r.category,
+        COALESCE(ac.label,c.label,r.category) category_label,
+        COALESCE(s.code,'SOPORTE-'||r.id::text) station_code,
+        COALESCE(s.label,r.support_location,'Soporte administrativo') station_name,
+        COALESCE(g.name,r.requester_area,'Administrativo') group_name,
+        r.requested_at,
+        COALESCE(t.assigned_at,r.assigned_at,r.attended_at) assigned_at,
+        t.resolved_at,
+        t.closed_at,
+        COALESCE(t.status,r.status) status,
+        u.id assigned_to,
+        u.full_name assigned_to_name,
+        u.username assigned_to_username,
+        sp.name sla_name,
+        sp.response_minutes,
+        sp.resolution_minutes,
+        t.response_due_at,
+        t.resolution_due_at,
+        CASE WHEN COALESCE(t.assigned_at,r.assigned_at,r.attended_at) IS NULL THEN NULL
+             ELSE GREATEST(0,EXTRACT(EPOCH FROM (COALESCE(t.assigned_at,r.assigned_at,r.attended_at)-r.requested_at))::bigint) END response_seconds,
+        CASE WHEN t.resolved_at IS NULL THEN NULL
+             ELSE GREATEST(0,EXTRACT(EPOCH FROM (t.resolved_at-r.requested_at))::bigint) END resolution_seconds,
+        CASE WHEN COALESCE(t.assigned_at,r.assigned_at,r.attended_at) IS NULL OR t.response_due_at IS NULL THEN NULL
+             ELSE COALESCE(t.assigned_at,r.assigned_at,r.attended_at) <= t.response_due_at END response_sla_met,
+        CASE WHEN t.resolved_at IS NULL OR t.resolution_due_at IS NULL THEN NULL
+             ELSE t.resolved_at <= t.resolution_due_at END resolution_sla_met
+      FROM support_requests r
+      LEFT JOIN tickets t ON t.request_id=r.id
+      LEFT JOIN stations s ON s.id=r.station_id
+      LEFT JOIN production_groups g ON g.id=s.group_id
+      LEFT JOIN support_categories c ON c.department=r.department AND c.code=r.category
+      LEFT JOIN admin_support_requests_catalog ac ON ac.department=r.department AND ac.code=r.category
+      LEFT JOIN users u ON u.id=t.assigned_to
+      LEFT JOIN sla_policies sp ON sp.id=COALESCE(t.sla_policy_id,r.sla_policy_id)
+      WHERE ${cond.join(' AND ')}
+      ORDER BY r.requested_at DESC
+    `,params);
+
+    const wb=new ExcelJS.Workbook();
+    wb.creator='ANDON Support';
+    wb.created=new Date();
+    wb.modified=new Date();
+
+    const thin={style:'thin',color:{argb:'FFD0D7DE'}};
+    const border={top:thin,left:thin,bottom:thin,right:thin};
+    const headerFill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F4E78'}};
+    const subFill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD9EAF7'}};
+
+    function title(ws,text,cols=8){
+      ws.mergeCells(1,1,1,cols);
+      const c=ws.getCell(1,1);c.value=text;c.font={bold:true,size:18,color:{argb:'FFFFFFFF'}};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF17365D'}};
+      c.alignment={vertical:'middle',horizontal:'left'};ws.getRow(1).height=28;
+    }
+    function styleHeader(row){
+      row.eachCell(c=>{c.font={bold:true,color:{argb:'FFFFFFFF'}};c.fill=headerFill;c.border=border;c.alignment={vertical:'middle'}});
+      row.height=22;
+    }
+    function autosize(ws,min=12,max=42){
+      ws.columns.forEach(col=>{
+        let len=min;
+        col.eachCell({includeEmpty:true},cell=>{len=Math.max(len,String(cell.value??'').length+2)});
+        col.width=Math.min(max,len);
+      });
+    }
+    function secs(v){
+      if(v===null||v===undefined)return '';
+      const n=Number(v);const h=Math.floor(n/3600),m=Math.floor((n%3600)/60);
+      return h?`${h}h ${m}m`:`${m}m`;
+    }
+    const created=rows.length;
+    const closed=rows.filter(x=>['closed','resolved'].includes(x.status)).length;
+    const respRows=rows.filter(x=>x.response_seconds!==null);
+    const resRows=rows.filter(x=>x.resolution_seconds!==null);
+    const avg=a=>a.length?Math.round(a.reduce((s,x)=>s+Number(x),0)/a.length):0;
+    const respSla=rows.filter(x=>x.response_sla_met!==null);
+    const resSla=rows.filter(x=>x.resolution_sla_met!==null);
+    const pct=a=>a.length?Math.round(100*a.filter(x=>x).length/a.length):0;
+
+    const summary=wb.addWorksheet('Resumen Ejecutivo',{views:[{state:'frozen',ySplit:4}]});
+    title(summary,'ANDON Support · Resumen Ejecutivo',8);
+    summary.getCell('A2').value='Generado';summary.getCell('B2').value=new Date();
+    summary.getCell('D2').value='Periodo';
+    summary.getCell('E2').value=`${req.query.from||'Inicio'} a ${req.query.to||'Hoy'}`;
+    summary.getRow(4).values=['KPI','Valor','KPI','Valor','KPI','Valor'];
+    styleHeader(summary.getRow(4));
+    summary.addRow(['Tickets creados',created,'Tickets cerrados',closed,'Pendientes',created-closed]);
+    summary.addRow(['Tiempo prom. respuesta',secs(avg(respRows.map(x=>x.response_seconds))),'Tiempo prom. resolución',secs(avg(resRows.map(x=>x.resolution_seconds))),'','']);
+    summary.addRow(['SLA respuesta',`${pct(respSla.map(x=>x.response_sla_met))}%`,'SLA resolución',`${pct(resSla.map(x=>x.resolution_sla_met))}%`,'','']);
+
+    summary.addRow([]);
+    summary.addRow(['Top incidencias','Cantidad']);
+    styleHeader(summary.getRow(summary.rowCount));
+    const catMap=new Map();
+    rows.forEach(x=>catMap.set(x.category_label||'Sin categoría',(catMap.get(x.category_label||'Sin categoría')||0)+1));
+    [...catMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(x=>summary.addRow(x));
+
+    summary.addRow([]);
+    summary.addRow(['Tickets por grupo / línea','Cantidad']);
+    styleHeader(summary.getRow(summary.rowCount));
+    const grpMap=new Map();
+    rows.forEach(x=>grpMap.set(x.group_name||'Sin grupo',(grpMap.get(x.group_name||'Sin grupo')||0)+1));
+    [...grpMap.entries()].sort((a,b)=>b[1]-a[1]).forEach(x=>summary.addRow(x));
+    autosize(summary);
+    // Graficos ejecutivos embebidos como imagenes de alta calidad.
+    const topCats=[...catMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6)
+      .map(([label,value])=>({label,value}));
+
+    const topGroups=[...grpMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6)
+      .map(([label,value])=>({label,value}));
+
+    const dayMap=new Map();
+    rows.forEach(x=>{
+      const d=new Date(x.requested_at);
+      const k=Number.isNaN(d.getTime())?'Sin fecha':d.toISOString().slice(5,10);
+      dayMap.set(k,(dayMap.get(k)||0)+1);
+    });
+    const trend=[...dayMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]))
+      .slice(-12).map(([label,value])=>({label,value}));
+
+    const slaItems=[
+      {label:'Respuesta',value:pct(respSla.map(x=>x.response_sla_met))},
+      {label:'Resolución',value:pct(resSla.map(x=>x.resolution_sla_met))}
+    ];
+
+    const img1=wb.addImage({buffer:await r187Png(r187LineSvg('Tendencia de tickets',trend)),extension:'png'});
+    const img2=wb.addImage({buffer:await r187Png(r187BarSvg('Top incidencias',topCats)),extension:'png'});
+    const img3=wb.addImage({buffer:await r187Png(r187BarSvg('Tickets por grupo / línea',topGroups)),extension:'png'});
+    const img4=wb.addImage({buffer:await r187Png(r187BarSvg('Cumplimiento SLA (%)',slaItems)),extension:'png'});
+
+    summary.addImage(img1,{tl:{col:0,row:summary.rowCount+2},ext:{width:760,height:330}});
+    summary.addImage(img2,{tl:{col:8,row:summary.rowCount+2},ext:{width:760,height:330}});
+    summary.addImage(img3,{tl:{col:0,row:summary.rowCount+20},ext:{width:760,height:330}});
+    summary.addImage(img4,{tl:{col:8,row:summary.rowCount+20},ext:{width:760,height:330}});
+
+    summary.pageSetup.orientation='landscape';
+    summary.pageSetup.fitToPage=true;
+    summary.pageSetup.fitToWidth=1;
+    summary.pageSetup.fitToHeight=0;
+    summary.pageMargins={left:0.25,right:0.25,top:0.45,bottom:0.45,header:0.15,footer:0.15};
+
+    const tickets=wb.addWorksheet('Tickets',{views:[{state:'frozen',ySplit:1}]});
+    tickets.columns=[
+      {header:'Ticket',key:'ticket_number'},{header:'Estado',key:'status'},
+      {header:'Solicitante',key:'requested_by'},{header:'Área solicitante',key:'requester_area'},
+      {header:'Ubicación',key:'support_location'},{header:'Área soporte',key:'department'},
+      {header:'Categoría',key:'category_label'},{header:'Grupo / Línea',key:'group_name'},
+      {header:'Equipo',key:'station_name'},{header:'Técnico',key:'assigned_to_name'},
+      {header:'Creado',key:'requested_at'},{header:'Asignado',key:'assigned_at'},
+      {header:'Resuelto',key:'resolved_at'},{header:'Cerrado',key:'closed_at'},
+      {header:'Tiempo respuesta',key:'response_time'},{header:'Tiempo resolución',key:'resolution_time'},
+      {header:'SLA respuesta',key:'response_sla'},{header:'SLA resolución',key:'resolution_sla'}
+    ];
+    styleHeader(tickets.getRow(1));
+    rows.forEach(x=>tickets.addRow({...x,response_time:secs(x.response_seconds),resolution_time:secs(x.resolution_seconds),
+      response_sla:x.response_sla_met===null?'':(x.response_sla_met?'Cumple':'No cumple'),
+      resolution_sla:x.resolution_sla_met===null?'':(x.resolution_sla_met?'Cumple':'No cumple')}));
+    autosize(tickets);
+
+    const slaWs=wb.addWorksheet('SLA',{views:[{state:'frozen',ySplit:1}]});
+    slaWs.columns=[{header:'Categoría',key:'category'},{header:'Tickets',key:'tickets'},
+      {header:'SLA respuesta %',key:'response'},{header:'SLA resolución %',key:'resolution'}];
+    styleHeader(slaWs.getRow(1));
+    for(const [cat] of [...catMap.entries()].sort((a,b)=>b[1]-a[1])){
+      const rr=rows.filter(x=>(x.category_label||'Sin categoría')===cat);
+      const a=rr.filter(x=>x.response_sla_met!==null),b=rr.filter(x=>x.resolution_sla_met!==null);
+      slaWs.addRow({category:cat,tickets:rr.length,response:pct(a.map(x=>x.response_sla_met)),resolution:pct(b.map(x=>x.resolution_sla_met))});
+    }
+    autosize(slaWs);
+
+    const tech=wb.addWorksheet('Técnicos Usuarios',{views:[{state:'frozen',ySplit:1}]});
+    tech.columns=[{header:'Técnico / Usuario',key:'name'},{header:'Tickets',key:'tickets'},
+      {header:'Resueltos',key:'resolved'},{header:'Tiempo prom. respuesta',key:'resp'},{header:'Tiempo prom. resolución',key:'res'}];
+    styleHeader(tech.getRow(1));
+    const techMap=new Map();
+    rows.forEach(x=>{
+      const k=x.assigned_to_name||'Sin asignar';
+      if(!techMap.has(k))techMap.set(k,[]);
+      techMap.get(k).push(x);
+    });
+    for(const [name,rr] of techMap){
+      tech.addRow({name,tickets:rr.length,resolved:rr.filter(x=>['resolved','closed'].includes(x.status)).length,
+        resp:secs(avg(rr.filter(x=>x.response_seconds!==null).map(x=>x.response_seconds))),
+        res:secs(avg(rr.filter(x=>x.resolution_seconds!==null).map(x=>x.resolution_seconds)))});
+    }
+    autosize(tech);
+
+    const areas=wb.addWorksheet('Áreas Plantas',{views:[{state:'frozen',ySplit:1}]});
+    areas.columns=[{header:'Área / Grupo',key:'area'},{header:'Tickets',key:'tickets'},
+      {header:'Solicitudes administrativas',key:'admin'},{header:'Producción',key:'prod'}];
+    styleHeader(areas.getRow(1));
+    const areaMap=new Map();
+    rows.forEach(x=>{
+      const k=x.requester_area||x.group_name||'Sin área';
+      if(!areaMap.has(k))areaMap.set(k,[]);
+      areaMap.get(k).push(x);
+    });
+    for(const [area,rr] of areaMap){
+      areas.addRow({area,tickets:rr.length,admin:rr.filter(x=>x.source==='administrative').length,
+        prod:rr.filter(x=>x.source!=='administrative').length});
+    }
+    autosize(areas);
+
+    const raw=wb.addWorksheet('Base de Datos',{views:[{state:'frozen',ySplit:1}]});
+    const rawCols=Object.keys(rows[0]||{request_id:''});
+    raw.columns=rawCols.map(k=>({header:k,key:k}));
+    styleHeader(raw.getRow(1));
+    rows.forEach(x=>raw.addRow(x));
+    autosize(raw,12,32);
+
+    for(const ws of wb.worksheets){
+      ws.autoFilter = ws.rowCount>1 ? {from:{row:ws.name==='Resumen Ejecutivo'?4:1,column:1},to:{row:ws.name==='Resumen Ejecutivo'?4:1,column:Math.max(1,ws.columnCount)}} : undefined;
+      ws.eachRow((row,rowNumber)=>{
+        row.eachCell(cell=>{
+          if(rowNumber>1)cell.border=border;
+          cell.alignment={vertical:'middle',wrapText:true};
+        });
+      });
+    }
+
+    const filename=`ANDON-Reporte-Gerencial-${new Date().toISOString().slice(0,10)}.xlsx`;
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',`attachment; filename="${filename}"`);
+    await wb.xlsx.write(res);
+    res.end();
+  }catch(e){
+    console.error('R1.8.7 P4 Excel',e);
+    if(!res.headersSent)res.status(500).json({error:`No se pudo generar Excel${e.code?' ('+e.code+')':''}`});
+  }
+});
 // ADMIN: SLA
 // ============================================================
-app.get('/api/admin/slas',requireManager,async(req,res)=>{const {rows}=await pool.query(`SELECT s.*,COALESCE(ac.label,c.label,r.category) category_label,g.name group_name,st.code station_code,st.label station_name FROM sla_policies s LEFT JOIN support_categories c ON c.department=s.department AND c.code=s.category LEFT JOIN production_groups g ON g.id=s.group_id LEFT JOIN stations st ON st.id=s.station_id ORDER BY s.enabled DESC,s.priority,s.name`);res.json(rows);});
+app.get('/api/admin/slas',requireManager,async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT
+        s.*,
+        COALESCE(ac.label,c.label,s.category) category_label,
+        g.name group_name,
+        st.code station_code,
+        st.label station_name
+      FROM sla_policies s
+      LEFT JOIN support_categories c
+        ON c.department=s.department AND c.code=s.category
+      LEFT JOIN admin_support_requests_catalog ac
+        ON ac.department=s.department AND ac.code=s.category
+      LEFT JOIN production_groups g
+        ON g.id=s.group_id
+      LEFT JOIN stations st
+        ON st.id=s.station_id
+      ORDER BY s.enabled DESC,s.priority,s.name
+    `);
+    res.json(rows);
+  }catch(e){
+    console.error('R1.8.7 GET /api/admin/slas:',e);
+    res.status(500).json({
+      error:'No se pudieron cargar las reglas SLA.',
+      code:e.code||null
+    });
+  }
+});
 app.post('/api/admin/slas',requireManager,async(req,res)=>{
   const body=req.body;const name=String(body.name||'').trim();if(!name)return res.status(400).json({error:'Nombre requerido'});
   const department=body.department&&await departmentValid(body.department)?body.department:null;const category=String(body.category||'').trim()||null;const groupId=Number(body.groupId||0)||null;const stationId=Number(body.stationId||0)||null;
@@ -1115,7 +2437,7 @@ app.delete('/api/admin/slas/:id',requireManager,async(req,res)=>{
     await client.query('BEGIN');
     const found=(await client.query(`SELECT id,name FROM sla_policies WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];
     if(!found){await client.query('ROLLBACK');return res.status(404).json({error:'Regla SLA no encontrada'});}
-    // Conservar histÃ³ricos: tickets/solicitudes mantienen sus timestamps SLA, sÃ³lo se desprenden de la regla eliminada.
+    // Conservar históricos: tickets/solicitudes mantienen sus timestamps SLA, sólo se desprenden de la regla eliminada.
     await client.query(`UPDATE tickets SET sla_policy_id=NULL WHERE sla_policy_id=$1`,[req.params.id]);
     await client.query(`UPDATE support_requests SET sla_policy_id=NULL WHERE sla_policy_id=$1`,[req.params.id]);
     await client.query(`DELETE FROM sla_policies WHERE id=$1`,[req.params.id]);
@@ -1125,7 +2447,7 @@ app.delete('/api/admin/slas/:id',requireManager,async(req,res)=>{
 });
 
 // ============================================================
-// AUTOCIERRE: RESUELTO -> CERRADO despuÃ©s del SLA configurado
+// AUTOCIERRE: RESUELTO -> CERRADO después del SLA configurado
 // ============================================================
 async function autoCloseResolved(){
   const client=await pool.connect();
@@ -1134,11 +2456,11 @@ async function autoCloseResolved(){
     for(const t of due){
       await client.query('BEGIN');
       const q=await client.query(`UPDATE tickets SET status='closed',closed_at=NOW(),closure_type='auto',
-        closure_notes=COALESCE(NULLIF(closure_notes,''),resolution_notes,'Cierre automÃ¡tico despuÃ©s de la ventana de validaciÃ³n'),
+        closure_notes=COALESCE(NULLIF(closure_notes,''),resolution_notes,'Cierre automático después de la ventana de validación'),
         updated_at=NOW() WHERE id=$1 AND status='resolved' RETURNING id`,[t.id]);
       if(q.rowCount){
         await client.query(`UPDATE support_requests SET status='closed',closed_at=NOW(),updated_at=NOW() WHERE id=$1`,[t.request_id]);
-        await logTicketEvent(client,t.id,'auto_closed','resolved','closed',null,'Cierre automÃ¡tico por ventana de validaciÃ³n SLA');
+        await logTicketEvent(client,t.id,'auto_closed','resolved','closed',null,'Cierre automático por ventana de validación SLA');
       }
       await client.query('COMMIT');
       if(q.rowCount){io.emit('ticket:changed',{action:'closed',ticketId:t.id,status:'closed',stationCode:t.station_code,department:t.department});io.emit('request:changed',{action:'closed',id:t.request_id,stationCode:t.station_code,department:t.department});}
@@ -1148,13 +2470,19 @@ async function autoCloseResolved(){
 setInterval(autoCloseResolved,15000);
 setTimeout(autoCloseResolved,5000);
 
+// ANDON_R187_P69_VISUAL_EXCEL
+require('./r187-excel-visual-p69')(app,pool,requireAuth);
+// ANDON_R187_P6_EXEC_REPORT
+require('./r187-executive-report')(app,pool,requireAuth);
+// ANDON_R187_P74_DYNAMIC_EXCEL
+require('./r187-dynamic-excel-p74')(app,pool,requireAuth);
 io.on('connection',socket=>{
   socket.emit('connected',{ok:true});
   socket.emit('server:hello',{build:APP_BUILD,bootId:BOOT_ID,serverTime:new Date().toISOString()});
 });
 
 server.listen(PORT,HOST,()=>{
-  console.log(`Andon Support R11.3 ejecutÃ¡ndose en http://localhost:${PORT}`);
+  console.log(`Andon Support R11.3 ejecutándose en http://localhost:${PORT}`);
   console.log(`Cliente: http://localhost:${PORT}/station/L1-E1`);
   console.log(`Dashboard: http://localhost:${PORT}/login`);
 });

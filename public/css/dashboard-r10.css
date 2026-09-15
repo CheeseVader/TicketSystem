@@ -281,3 +281,52 @@ body.andon-layout-pointer-drag *{cursor:grabbing!important}
 .admin-alert-card:hover{border-color:#e4ae43}
 .admin-alert-card .alert-status{color:#ffc85c}
 .assignment-load{font-size:11px;color:#8fa3b5}
+
+/* ANDON_R187_P63_PRINT */
+@media print{
+  /* El PDF debe ser un reporte, no una captura de la pantalla de filtros. */
+  #view-reports .analytics-filters,
+  #view-reports .report-filters,
+  #view-reports .analytics-filter-grid,
+  #view-reports .filter-bar,
+  #view-reports [class*="filter"][class*="panel"],
+  #view-reports button,
+  #view-reports .report-actions,
+  #view-reports .analytics-actions{
+    display:none!important;
+  }
+
+  #view-reports{
+    display:block!important;
+  }
+
+  #view-reports .analytics-kpis,
+  #view-reports .report-grid,
+  #view-reports .analytics-grid,
+  #view-reports canvas,
+  #view-reports svg{
+    break-inside:avoid!important;
+    page-break-inside:avoid!important;
+  }
+
+  #view-reports{
+    padding-top:0!important;
+    margin-top:0!important;
+  }
+}
+/* ANDON_R187_P65_PRINT */
+@media print{
+  .p65-print-hide{display:none!important}
+  #view-reports .analytics-filters,
+  #view-reports .report-filters,
+  #view-reports .analytics-filter-grid,
+  #view-reports .filter-bar,
+  #view-reports .report-actions,
+  #view-reports .analytics-actions,
+  #view-reports select,
+  #view-reports input,
+  #view-reports button{
+    display:none!important;
+  }
+  #view-reports{margin:0!important;padding:0!important}
+}

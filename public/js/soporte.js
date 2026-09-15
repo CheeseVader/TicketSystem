@@ -50,3 +50,12 @@ form.addEventListener('submit',async e=>{
 function speak(text){if(!window.speechSynthesis||!text)return;let spoken=false;const go=()=>{if(spoken)return true;const vs=speechSynthesis.getVoices();if(!vs.length)return false;spoken=true;const u=new SpeechSynthesisUtterance(text);u.lang='es-US';u.rate=1.30;u.pitch=1.05;u.volume=1;u.voice=vs.find(v=>v.name==='Google español de Estados Unidos')||vs.find(v=>String(v.lang||'').toLowerCase()==='es-us')||vs.find(v=>String(v.lang||'').toLowerCase().startsWith('es'))||vs[0];speechSynthesis.cancel();speechSynthesis.speak(u);return true};if(go())return;let n=0;const t=setInterval(()=>{n++;if(go()||n>=20)clearInterval(t)},250)}
 socket.on('request:changed',evt=>{if(evt.action==='assigned'&&lastRequestId&&Number(evt.id)===Number(lastRequestId)){speak(`Su solicitud de ${(catalog.departments||[]).find(d=>d.code===evt.department)?.name||evt.department} ha sido asignada. Enseguida será atendida.`);msg('Su solicitud ha sido asignada. Enseguida será atendida.','ok')}});
 loadCatalog().catch(e=>msg(e.message,'error'));
+
+/* R187_SOPORTE_TERMINAL_REFRESH */
+socket.on('request:changed',evt=>{
+  if(!lastRequestId || Number(evt.id)!==Number(lastRequestId)) return;
+  if(['resolved','closed','cancelled'].includes(String(evt.action||evt.status||'').toLowerCase())){
+    lastRequestId=null;
+    msg('La solicitud anterior fue cerrada. Puede generar una nueva solicitud.','ok');
+  }
+});

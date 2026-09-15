@@ -1,0 +1,34 @@
+#r187P4Modal{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:99999;display:none;align-items:center;justify-content:center;padding:22px}
+#r187P4Modal.open{display:flex}
+#r187P4Modal .p4-card{width:min(640px,96vw);max-height:88vh;overflow:auto;background:#101e2a;border:1px solid #345069;border-radius:18px;color:#fff;box-shadow:0 24px 70px rgba(0,0,0,.45)}
+#r187P4Modal .p4-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:22px 24px;border-bottom:1px solid #2a4154}
+#r187P4Modal .p4-head h2{margin:0 0 5px;font-size:23px}
+#r187P4Modal .p4-head p{margin:0;color:#8eacc3}
+#r187P4Modal .p4-x{border:0;background:transparent;color:#dbeaf5;font-size:28px;cursor:pointer}
+#r187P4Modal .p4-body{padding:20px 24px;display:grid;gap:12px}
+#r187P4Modal .p4-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#r187P4Modal .p4-field{background:#0d1823;border:1px solid #29485f;border-radius:10px;padding:11px 13px}
+#r187P4Modal .p4-field span{display:block;color:#84a8c2;font-size:11px;font-weight:800;text-transform:uppercase;margin-bottom:4px}
+#r187P4Modal .p4-field strong{font-size:14px}
+#r187P4Modal .p4-actions{display:flex;gap:10px;flex-wrap:wrap;padding:0 24px 24px}
+#r187P4Modal .p4-btn{border:0;border-radius:10px;padding:11px 16px;background:#2f80ed;color:#fff;font-weight:800;cursor:pointer}
+#r187P4Modal .p4-btn.secondary{background:#193147;color:#c7e2f5}
+#r187P4Modal .p4-btn.ghost{background:#e9eef4;color:#27394a}
+#r187P4Modal select{width:100%;background:#0d1823;color:#fff;border:1px solid #34526a;border-radius:9px;padding:10px}
+#groupsGrid .station-tile{cursor:pointer}
+#groupsGrid .station-tile:hover{outline:2px solid rgba(47,128,237,.65);outline-offset:1px}
+@media(max-width:650px){#r187P4Modal .p4-grid{grid-template-columns:1fr}}
+
+@media print{
+  body.r187-report-print .sidebar,
+  body.r187-report-print .dashboard-sidebar,
+  body.r187-report-print .topbar,
+  body.r187-report-print .dashboard-topbar,
+  body.r187-report-print .report-filters,
+  body.r187-report-print form,
+  body.r187-report-print button,
+  body.r187-report-print select,
+  body.r187-report-print input,
+  body.r187-report-print .no-print,
+  body.r187-report-print [data-no-print="true"]{display:none!important}
+}

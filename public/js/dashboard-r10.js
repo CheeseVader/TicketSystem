@@ -1056,3 +1056,25 @@ socket.on('request:changed',evt=>{
 (async()=>{const m=await api('/api/me');if(!m.user)return location='/login';me=m.user;await loadDepartmentOptions();renderIdentity();await showView(location.hash.replace('#','')||'dashboard')})();
 
 
+
+// ANDON_R187_P61_FORCE_EXCEL
+(()=>{
+  const btn=document.querySelector('#exportReportExcel');
+  if(!btn)return;
+
+  const clean=btn.cloneNode(true);
+  btn.parentNode.replaceChild(clean,btn);
+
+  clean.addEventListener('click',()=>{
+    const q=new URLSearchParams();
+    const map={
+      from:'repFrom',to:'repTo',department:'repDept',group:'repGroup',
+      category:'repCategory',engineer:'repEngineer',status:'repStatus'
+    };
+    for(const [k,id] of Object.entries(map)){
+      const v=document.getElementById(id)?.value||'';
+      if(v)q.set(k,v);
+    }
+    location.href='/api/r187/reports/executive.xlsx?'+q.toString();
+  });
+})();
