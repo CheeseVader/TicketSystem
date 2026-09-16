@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Andon Support R11.4</title>
-<link rel="stylesheet" href="/css/app.css?v=11.9.8">
-<link rel="stylesheet" href="/css/dashboard-r10.css?v=11.9.3-final-color">
+<link rel="stylesheet" href="/css/app.css?v=11.4">
+<link rel="stylesheet" href="/css/dashboard-r10.css?v=1.8.7-p6.5.1">
 
 <style id="r1083-responsive-reports">
 /* R10.8.3: Reportes optimizados para zoom 100% / 1366-1920px */
@@ -159,69 +159,6 @@
 </style>
   <link rel="stylesheet" href="/css/admin-users-plants-r187.css?v=1.8.7-p3">
   <link rel="stylesheet" href="/css/andon-p4-r187.css?v=1.8.7-p4">
-<!-- ANDON_R11_9_4_INLINE_COLORS_START -->
-<style id="andon-r11-9-4-inline-colors">
-/* SISTEMAS - prioridad superior al alert-focus del modal */
-#lineMapModal .station-tile.has-systems,
-#lineMapModal .station-tile.has-systems.alert-focus,
-.station-tile.has-systems{
-  background:#087BF0 !important;
-  background-image:linear-gradient(180deg,#2196F3 0%,#087BF0 100%) !important;
-  border:2px solid #00D9FF !important;
-  color:#FFFFFF !important;
-  box-shadow:
-    0 0 0 2px #00D9FF,
-    0 0 10px #00D9FF,
-    0 0 22px rgba(0,217,255,.85),
-    inset 0 0 12px rgba(255,255,255,.16) !important;
-}
-
-/* MANTENIMIENTO */
-#lineMapModal .station-tile.has-maintenance,
-#lineMapModal .station-tile.has-maintenance.alert-focus,
-.station-tile.has-maintenance{
-  background:#FF7A00 !important;
-  background-image:linear-gradient(180deg,#FFB000 0%,#FF7A00 100%) !important;
-  border:2px solid #FFD000 !important;
-  color:#FFFFFF !important;
-  box-shadow:
-    0 0 0 2px #FFD000,
-    0 0 10px #FFB000,
-    0 0 22px rgba(255,152,0,.88),
-    inset 0 0 12px rgba(255,255,255,.16) !important;
-}
-
-/* SISTEMAS + MANTENIMIENTO */
-#lineMapModal .station-tile.both,
-#lineMapModal .station-tile.both.alert-focus,
-.station-tile.both{
-  background:#087BF0 !important;
-  background-image:linear-gradient(
-    135deg,
-    #2196F3 0%,
-    #087BF0 49.8%,
-    #FFB000 50.2%,
-    #FF7A00 100%
-  ) !important;
-  border:2px solid #FFFFFF !important;
-  color:#FFFFFF !important;
-  box-shadow:
-    0 0 10px #00D9FF,
-    0 0 22px rgba(255,152,0,.82),
-    inset 0 0 12px rgba(255,255,255,.16) !important;
-}
-
-#lineMapModal .station-tile.has-systems *,
-#lineMapModal .station-tile.has-maintenance *,
-#lineMapModal .station-tile.both *,
-.station-tile.has-systems *,
-.station-tile.has-maintenance *,
-.station-tile.both *{
-  color:#FFFFFF !important;
-  text-shadow:0 1px 3px rgba(0,0,0,.9) !important;
-}
-</style>
-<!-- ANDON_R11_9_4_INLINE_COLORS_END -->
 </head>
 <body class="dashboard-body">
 <div class="dashboard-shell">
@@ -454,42 +391,10 @@
 <div id="toast" class="toast"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="/js/session-heartbeat-r187.js?v=1.8.7-p2.5"></script>
-<script src="/js/dashboard-r10.js?v=11.9.3-final-color"></script>
+<script src="/js/dashboard-r10.js?v=1.8.7-p6.3"></script>
   <script src="/js/admin-users-plants-r187.js?v=1.8.7-p5.3"></script>
   <script src="/js/andon-p4-r187.js?v=1.8.7-p5.3"></script><script src="/js/andon-admin-modal-p61.js?v=1.8.7-p7.0"></script><script src="/vendor/html2canvas.min.js?v=1.8.7-p7.0"></script>
 <script src="/js/andon-report-export-p70.js?v=1.8.7-p7.6.1"></script>
 <script src="/js/andon-admin-fix-p75.js?v=1.8.7-p7.5"></script>
 </body></html>
 
-/* ANDON_R11_9_6_REAL_ALERT_COLORS */
-.station-tile.has-systems,
-.station-tile.has-systems.alert-focus{
-  background:#087BF0 !important;
-  background-color:#087BF0 !important;
-  background-image:linear-gradient(180deg,#2196F3 0%,#087BF0 100%) !important;
-  border:2px solid #00D9FF !important;
-  color:#fff !important;
-  box-shadow:0 0 10px #00D9FF,0 0 22px rgba(0,217,255,.85) !important;
-}
-.station-tile.has-maintenance,
-.station-tile.has-maintenance.alert-focus{
-  background:#FF7A00 !important;
-  background-color:#FF7A00 !important;
-  background-image:linear-gradient(180deg,#FFB000 0%,#FF7A00 100%) !important;
-  border:2px solid #FFD000 !important;
-  color:#fff !important;
-  box-shadow:0 0 10px #FFB000,0 0 22px rgba(255,152,0,.88) !important;
-}
-.station-tile.both,
-.station-tile.both.alert-focus{
-  background:#087BF0 !important;
-  background-image:linear-gradient(135deg,#2196F3 0%,#087BF0 49.8%,#FFB000 50.2%,#FF7A00 100%) !important;
-  border:2px solid #fff !important;
-  color:#fff !important;
-}
-.station-tile.has-systems *,
-.station-tile.has-maintenance *,
-.station-tile.both *{
-  color:#fff !important;
-  text-shadow:0 1px 3px rgba(0,0,0,.9) !important;
-}

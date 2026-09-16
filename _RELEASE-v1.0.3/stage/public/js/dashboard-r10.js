@@ -423,11 +423,7 @@ function renderProductionLine(g,stations,byStation){
       }
       const arr=byStation[st.code]||[];
       const state=arr.length?arr.map(x=>`${fmtDept(x.department)} · ${statusNames[x.ticket_status||x.status]||x.status}`).join(' / '):'OK';
-      // R11.9.3: usar el nombre resuelto por el catalogo, no asumir el codigo interno.
-      const deptVisual=x=>String(fmtDept(x.department)||x.department||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-      const hasSystems=arr.some(x=>{const d=deptVisual(x);return d.includes('sistem')||d==='systems'||d==='system';});
-      const hasMaintenance=arr.some(x=>{const d=deptVisual(x);return d.includes('manten')||d.includes('maint');});
-      const cls=hasSystems&&hasMaintenance?'both':hasSystems?'has-systems':hasMaintenance?'has-maintenance':'';
+      const cls=arr.some(x=>x.department==='systems')?'has-systems':arr.some(x=>x.department==='maintenance')?'has-maintenance':'';
       const drag=andonLayoutEdit&&isLayoutManager()?'tabindex="0" aria-grabbed="false"':'';
       slots.push(`<div class="layout-slot" data-layout-row="${row}" data-layout-col="${col}"><div class="station-tile ${cls}${andonLayoutEdit?' layout-editable':''}" data-station-id="${st.id}" data-layout-row="${row}" data-layout-col="${col}" ${drag} title="${andonLayoutEdit?'Arrastra o usa las flechas para mover · ':''}Fila ${row}, posición ${col}"><span class="code">${esc(st.code)}</span><span class="station-name">${esc(st.label||'')}</span><span class="state">${esc(state)}</span></div></div>`);
     }
