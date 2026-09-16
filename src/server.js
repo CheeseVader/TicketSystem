@@ -70,7 +70,7 @@ const ACTIVE_TICKET_STATUSES = ['assigned','in_progress','waiting','escalated','
 const HISTORY_STATUSES = ['closed','cancelled'];
 const OPEN_REQUEST_STATUSES = ['unassigned','assigned','in_progress','waiting','escalated'];
 
-/* ANDON_R187_SINGLE_SESSION_HELPERS */
+/* MULTISESSION: sesiones concurrentes permitidas */
 const USER_SESSION_TTL_MS = 8*60*60*1000;
 
 function loginClientIp(req){
@@ -232,26 +232,8 @@ app.post('/login',async(req,res)=>{
 
     await client.query('BEGIN');
     await client.query(`DELETE FROM active_user_sessions WHERE expires_at<=NOW()`);
+    // MULTISESSION: no se bloquea el acceso por sesiones existentes.
 
-    const active=(await client.query(`
-      SELECT user_id,login_at,last_seen_at,expires_at
-      FROM active_user_sessions
-      WHERE user_id=$1
-      FOR UPDATE
-    `,[user.id])).rows[0];
-
-    if(active){
-      await client.query('ROLLBACK');
-      return res.status(409).send(
-        '<!doctype html><html><head><meta charset="utf-8"><title>Sesión activa</title></head>'+
-        '<body style="font-family:Arial,sans-serif;background:#0d141d;color:#fff;padding:40px">'+
-        '<div style="max-width:620px;margin:auto;background:#17212d;padding:28px;border-radius:14px">'+
-        '<h2>Este usuario ya tiene una sesión activa</h2>'+
-        '<p>Cierre la sesión anterior o solicite al administrador liberarla.</p>'+
-        '<p><a style="color:#7dd3fc" href="/login">Regresar al inicio de sesión</a></p>'+
-        '</div></body></html>'
-      );
-    }
 
     const token=crypto.randomUUID();
     const expiresAt=new Date(Date.now()+USER_SESSION_TTL_MS);
@@ -269,16 +251,7 @@ app.post('/login',async(req,res)=>{
         loginClientIp(req),
         String(req.headers['user-agent']||'').slice(0,1000)
       ]);
-    }catch(e){
-      if(e.code==='23505'){
-        await client.query('ROLLBACK');
-        return res.status(409).send(
-          'Este usuario ya tiene una sesión activa en otro dispositivo. '+
-          '<a href="/login">Regresar</a>'
-        );
-      }
-      throw e;
-    }
+    }catch(e){ throw e; }
 
     await client.query('COMMIT');
 
@@ -1468,54 +1441,6 @@ app.post('/api/session/release',async(req,res)=>{
   }catch(e){
     console.error('R1.8.7 P2.5 release-intent:',e);
     res.status(204).end();
-  }
-});
-/* ANDON_R187_SINGLE_SESSION_ADMIN */
-app.get('/api/admin/active-sessions',requireManager,async(req,res)=>{
-  try{
-    const {rows}=await pool.query(`
-      SELECT
-        s.user_id,
-        u.username,
-        u.full_name,
-        u.role,
-        u.department,
-        s.login_at,
-        s.last_seen_at,
-        s.expires_at,
-        s.ip_address,
-        s.user_agent
-      FROM active_user_sessions s
-      JOIN users u ON u.id=s.user_id
-      WHERE s.expires_at>NOW()
-      ORDER BY s.login_at DESC
-    `);
-    res.json(rows);
-  }catch(e){
-    console.error('R1.8.7 active sessions:',e);
-    res.status(500).json({error:'No se pudieron consultar las sesiones activas.'});
-  }
-});
-
-app.post('/api/admin/users/:id/release-session',requireManager,async(req,res)=>{
-  try{
-    const targetId=Number(req.params.id);
-    if(!targetId) return res.status(400).json({error:'Usuario inválido'});
-    if(Number(req.session.user.id)===targetId){
-      return res.status(409).json({error:'No puedes liberar tu propia sesión desde administración. Usa Cerrar sesión.'});
-    }
-
-    const q=await pool.query(`
-      DELETE FROM active_user_sessions
-      WHERE user_id=$1
-      RETURNING user_id
-    `,[targetId]);
-
-    io.emit('data:changed',{type:'sessions',userId:targetId});
-    res.json({ok:true,released:q.rowCount>0});
-  }catch(e){
-    console.error('R1.8.7 release session:',e);
-    res.status(500).json({error:'No se pudo liberar la sesión del usuario.'});
   }
 });
 /* ANDON_R187_P3_PLANT_USER_AREA */

@@ -71,7 +71,7 @@ function renderUsers(){
       </form>
       <div class="r187-table-wrap">
         <table class="r187-table">
-          <thead><tr><th>Planta</th><th>Área</th><th>Rol</th><th>Usuario</th><th>Nombre</th><th>Estado</th><th>Sesión</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Planta</th><th>Área</th><th>Rol</th><th>Usuario</th><th>Nombre</th><th>Estado</th><th>Acciones</th></tr></thead>
           <tbody id="r187UsersBody"></tbody>
         </table>
       </div>
@@ -83,7 +83,7 @@ function renderUsers(){
 }
 function drawUsers(){
   const b=document.querySelector('#r187UsersBody'); if(!b)return;
-  if(!S.users.length){b.innerHTML='<tr><td colspan="8" class="r187-empty">No hay usuarios.</td></tr>';return}
+  if(!S.users.length){b.innerHTML='<tr><td colspan="7" class="r187-empty">No hay usuarios.</td></tr>';return}
   b.innerHTML=S.users.map(u=>`
     <tr>
       <td>${u.role==='superadmin'
@@ -92,10 +92,6 @@ function drawUsers(){
       <td><select data-user-dept="${u.id}"><option value="">Sin área</option>${deptOptions()}</select></td>
       <td>${esc(u.role)}</td><td>${esc(u.username)}</td><td>${esc(u.full_name)}</td>
       <td><span class="r187-pill ${u.active?'ok':'off'}">${u.active?'Activo':'Inactivo'}</span></td>
-      <td><span class="r187-pill ${u.session_active?'ok':'off'}">${u.session_active?'Activa':'Libre'}</span></td>
-      <td>${u.session_active && u.role!=='superadmin'
-        ? `<button class="r187-btn warn" data-release="${u.id}">Liberar sesión</button>`
-        : u.session_active?'<span class="r187-pill">Sesión actual</span>':'—'}</td>
     </tr>`).join('');
   for(const u of S.users){
     const p=document.querySelector(`[data-user-plant="${u.id}"]`);
@@ -103,7 +99,6 @@ function drawUsers(){
     const d=document.querySelector(`[data-user-dept="${u.id}"]`);
     if(d){d.value=u.department||'';d.onchange=()=>updateUser(u.id,undefined,d.value)}
   }
-  document.querySelectorAll('[data-release]').forEach(btn=>btn.onclick=()=>releaseSession(btn.dataset.release));
 }
 async function createUser(e){
   e.preventDefault();
@@ -128,13 +123,6 @@ async function updateUser(id,plantId,department){
     await api(`/api/r187/admin/users/${id}`,{method:'PATCH',body:JSON.stringify(body)});
     await refresh(); drawUsers(); msg('Usuario actualizado.');
   }catch(e){await refresh();drawUsers();msg(e.message,true)}
-}
-async function releaseSession(id){
-  if(!confirm('¿Liberar la sesión activa de este usuario?'))return;
-  try{
-    await api(`/api/admin/users/${id}/release-session`,{method:'POST',body:'{}'});
-    await refresh(); drawUsers(); msg('Sesión liberada.');
-  }catch(e){msg(e.message,true)}
 }
 function renderAreas(){
   const c=document.querySelector('#r187Content');
