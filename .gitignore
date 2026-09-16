@@ -54,3 +54,10 @@ release-output/
 token.txt
 _BACKUP-*/
 _AUDIT-*/
+# ANDON - archivos locales de diagnostico/reparacion
+ANDON-DIAGNOSTICO-UTF8-NODE.ps1
+ANDON-MULTISESION-FIX-*.ps1
+ANDON-REPARAR-MULTISESION-*.ps1
+*.BAK-*
+*.BEFORE-*
+views/dashboard.html.BAK-CSS-VISIBLE-*
