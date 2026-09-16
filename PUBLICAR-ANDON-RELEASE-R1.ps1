@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$ProjectRoot = "C:\Users\igarcia\Videos\andon",
@@ -98,20 +98,32 @@ if(Test-Path ".\package-lock.json"){
 }
 if($LASTEXITCODE -ne 0){ Fail "npm fallo." }
 
-Step "Guardando codigo en GitHub"
-Run-Git @("add",".")
-$status = ((& git.exe status --porcelain) | Out-String).Trim()
+Step "Validando codigo publicado en GitHub"
 
+$status = ((& git.exe status --porcelain) | Out-String).Trim()
 if($status){
-    Run-Git @("commit","-m","release: ANDON $tag")
+    Write-Host ""
+    Write-Host "Cambios locales detectados:" -ForegroundColor Yellow
+    & git.exe status --short
+    Fail "El repositorio tiene cambios locales. Haz commit/push antes de crear un Release."
 }
 
 $branch = ((& git.exe branch --show-current) | Out-String).Trim()
-if([string]::IsNullOrWhiteSpace($branch)){ $branch = "main" }
+if([string]::IsNullOrWhiteSpace($branch)){
+    Fail "HEAD separado (detached). Debes publicar desde una rama."
+}
 
-Run-Git @("push","origin",$branch)
+Run-Git @("fetch","origin")
 
-$commit = ((& git.exe rev-parse "HEAD") | Out-String).Trim()
+$localCommit = ((& git.exe rev-parse "HEAD") | Out-String).Trim()
+$remoteCommit = ((& git.exe rev-parse "origin/$branch") | Out-String).Trim()
+
+if($localCommit -ne $remoteCommit){
+    Fail "HEAD local no coincide con origin/$branch. Haz push antes de crear el Release."
+}
+
+$commit = $localCommit
+Ok "Codigo limpio y publicado: $commit"
 
 Step "Generando paquete Release limpio"
 $out = Join-Path $ProjectRoot "release-output"
