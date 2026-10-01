@@ -1,0 +1,56 @@
+ANDON + DCI WIFI WATCHDOG R2.4.4
+=================================
+
+MISMA RPi:
+  10.138.43.217
+
+POR QUE EXISTE ESTA VERSION
+---------------------------
+Se encontro que, despues de corregir la ruta a:
+
+  10.138.43.217/32 -> 10.138.40.1 -> Wi-Fi
+
+la ruta vieja volvia a aparecer como:
+
+  10.138.43.217/32 -> 10.138.95.1 -> Ethernet
+
+El instalador legacy de ANDON creaba:
+  Task: ANDON-AutoNetworkFix
+  Path: C:\ProgramData\ANDON-NETWORK-FIX\repair-route.ps1
+
+y esa logica elegia la ruta por defecto y recreaba el /32 cada 5 minutos.
+
+R2.4.4:
+- elimina ANDON-AutoNetworkFix legacy;
+- elimina ANDON-DCI-AutoNetworkFix anterior;
+- elimina C:\ProgramData\ANDON-NETWORK-FIX legacy;
+- limpia la ruta .217 en Active/Persistent;
+- NO deja ruta persistente .217;
+- instala un watchdog continuo como SYSTEM;
+- revisa Wi-Fi cada 5 segundos;
+- si Wi-Fi cae, espera;
+- cuando Wi-Fi regresa a 10.138.40-43.x, crea la ruta correcta inmediatamente;
+- reintenta registro UDP 8788;
+- registra cambios y estado de TCP/80.
+
+INSTALAR
+--------
+INSTALAR-ANDON-DCI-WIFI-WATCHDOG-R2.4.4.cmd
+
+VER ESTADO
+----------
+VER-ESTADO-R2.4.4.cmd
+
+MONITOR VISIBLE
+---------------
+MONITOREAR-WIFI-EN-VIVO-R2.4.4.cmd
+
+DESINSTALAR
+-----------
+DESINSTALAR-ANDON-DCI-WIFI-WATCHDOG-R2.4.4.cmd
+
+NO GIT
+NO RELEASE
+NO SSH
+NO SCP
+NO modifica directamente la Raspberry Pi.
