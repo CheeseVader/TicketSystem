@@ -1,60 +1,48 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-CORE_VERSION="2.1.0"
-DEFAULT_SERVICE_IP="10.138.43.217"
-SERVICE_IP="${ANDON_DCI_SERVICE_IP:-$DEFAULT_SERVICE_IP}"
+CORE_VERSION="2.2.0"
+SERVICE_IP="${ANDON_DCI_SERVICE_IP:-10.138.43.217}"
+STATE_DIR="/var/lib/andon-network-fix"
+CLIENTS_FILE="$STATE_DIR/clients.txt"
+FIX="/usr/local/sbin/andon-network-fix.sh"
+REGISTER="/usr/local/sbin/andon-client-register.py"
 BACKUP_ROOT="/var/backups/andon-dci-network-core"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="$BACKUP_ROOT/$STAMP"
 LAST_LINK="$BACKUP_ROOT/LAST"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTER="/usr/local/sbin/andon-dci-vlan-routing.sh"
-ROUTE_ENV="/etc/andon-dci-network.env"
 
 say(){ printf '\n==> %s\n' "$*"; }
 ok(){ printf '[OK] %s\n' "$*"; }
 warn(){ printf '[WARN] %s\n' "$*" >&2; }
 die(){ printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
-[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Este postinstall requiere root en Raspberry Pi."
+[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Este postinstall requiere root."
 
-say "ANDON/DCI Network Core $CORE_VERSION"
+say "ANDON/DCI Network Core $CORE_VERSION - Warehouse routing model"
 
-TARGET_IF="$({
+TARGET_IF="$(
   ip -4 -o addr show scope global 2>/dev/null |
-    awk -v ip="$SERVICE_IP" '$4 ~ ("^" ip "/") {print $2; exit}'
-} || true)"
-
+  awk -v ip="$SERVICE_IP" '$4 ~ ("^" ip "/") {print $2; exit}'
+)"
 if [[ -z "${TARGET_IF:-}" ]]; then
   DEFAULT_LINE="$(ip -4 route show default 2>/dev/null | head -n1 || true)"
-  TARGET_IF="$(awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$DEFAULT_LINE")"
-  DETECTED_SRC="$(awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$DEFAULT_LINE")"
-  if [[ -z "${DETECTED_SRC:-}" && -n "${TARGET_IF:-}" ]]; then
-    DETECTED_SRC="$(ip -4 -o addr show dev "$TARGET_IF" scope global 2>/dev/null | awk 'NR==1{split($4,a,"/");print a[1]}')"
-  fi
-  [[ -n "${TARGET_IF:-}" && -n "${DETECTED_SRC:-}" ]] || die "No pude detectar interfaz/IPv4 de servicio."
-  warn "$SERVICE_IP no esta asignada; usando $DETECTED_SRC en $TARGET_IF."
-  SERVICE_IP="$DETECTED_SRC"
+  TARGET_IF="$(awk '{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}' <<<"$DEFAULT_LINE")"
+  SERVICE_IP="$(ip -4 -o addr show dev "$TARGET_IF" scope global 2>/dev/null | awk 'NR==1{split($4,a,"/");print a[1]}')"
 fi
-
-mapfile -t LOCAL_CIDRS < <(
-  ip -4 -o addr show dev "$TARGET_IF" scope global 2>/dev/null | awk '{print $4}'
-)
-[[ ${#LOCAL_CIDRS[@]} -gt 0 ]] || die "No hay IPv4 global en $TARGET_IF."
+[[ -n "${TARGET_IF:-}" && -n "${SERVICE_IP:-}" ]] || die "No pude detectar interfaz/IP."
 
 GATEWAY="$(ip -4 route show default dev "$TARGET_IF" 2>/dev/null | awk 'NR==1{print $3}')"
-[[ -n "${GATEWAY:-}" ]] || die "No pude detectar gateway en $TARGET_IF."
+[[ -n "${GATEWAY:-}" ]] || die "No pude detectar gateway."
 
 SERVICE_OCT3="$(awk -F. '{print $3}' <<<"$SERVICE_IP")"
-[[ "$SERVICE_OCT3" =~ ^[0-9]+$ ]] || die "IPv4 de servicio invalida: $SERVICE_IP"
-LOCAL_L2_NET="10.138.${SERVICE_OCT3}.0/24"
+[[ "$SERVICE_OCT3" =~ ^[0-9]+$ ]] || die "IP invalida."
 
 printf 'Service IP : %s\n' "$SERVICE_IP"
 printf 'Interface  : %s\n' "$TARGET_IF"
-printf 'CIDR OS    : %s\n' "${LOCAL_CIDRS[*]}"
-printf 'L2 policy  : %s direct\n' "$LOCAL_L2_NET"
 printf 'Gateway    : %s\n' "$GATEWAY"
+printf 'L2 local   : 10.138.%s.0/24\n' "$SERVICE_OCT3"
 
 MISSING=()
 command -v nginx >/dev/null 2>&1 || MISSING+=(nginx)
@@ -85,7 +73,6 @@ MANAGED_PATHS=(
   /usr/local/sbin/andon-client-register.py
   /etc/systemd/system/andon-network-fix.service
   /etc/systemd/system/andon-client-register.service
-  /etc/systemd/system/dci-mdns.service
   /etc/NetworkManager/dispatcher.d/90-andon-network-fix
   /etc/sysctl.d/90-andon-dci-network.conf
   /usr/local/sbin/andon-dci-vlan-routing.sh
@@ -106,39 +93,34 @@ backup_one(){
 }
 for p in "${MANAGED_PATHS[@]}"; do backup_one "$p"; done
 
-for unit in \
+for u in \
   andon-network-fix.service \
   andon-client-register.service \
-  dci-mdns.service \
   andon-dci-vlan-routing.service \
   avahi-daemon.service \
   nginx.service
 do
   printf '%s|%s|%s\n' \
-    "$unit" \
-    "$(systemctl is-enabled "$unit" 2>/dev/null || true)" \
-    "$(systemctl is-active "$unit" 2>/dev/null || true)" \
+    "$u" \
+    "$(systemctl is-enabled "$u" 2>/dev/null || true)" \
+    "$(systemctl is-active "$u" 2>/dev/null || true)" \
     >> "$BACKUP/services.list"
 done
 
-printf '%s\n' "$SERVICE_IP" > "$BACKUP/service-ip.txt"
-printf '%s\n' "$TARGET_IF" > "$BACKUP/interface.txt"
-printf '%s\n' "${LOCAL_CIDRS[*]}" > "$BACKUP/cidrs.txt"
 ip -4 route show table main > "$BACKUP/routes-before.txt" || true
 ln -sfn "$BACKUP" "$LAST_LINK"
-ok "Backup de red: $BACKUP"
+ok "Backup: $BACKUP"
 
 restore_files(){
-  [[ -f "$BACKUP/paths.list" ]] || return 0
   while IFS='|' read -r state p; do
     [[ -n "${p:-}" ]] || continue
     rm -rf "$p"
     if [[ "$state" == "EXISTS" ]]; then
       src="$BACKUP/rootfs$p"
-      if [[ -e "$src" || -L "$src" ]]; then
+      [[ -e "$src" || -L "$src" ]] && {
         mkdir -p "$(dirname "$p")"
         cp -a "$src" "$p"
-      fi
+      }
     fi
   done < "$BACKUP/paths.list"
   systemctl daemon-reload || true
@@ -147,89 +129,97 @@ restore_files(){
 }
 rollback_on_error(){
   rc=$?
-  warn "Network Core fallo RC=$rc; restaurando."
+  warn "Network Core fallo RC=$rc; restaurando backup."
   restore_files
   exit "$rc"
 }
 trap rollback_on_error ERR
 
-# Retire the legacy per-client services. v2.1 replaces them with deterministic
-# /24 L2-segment routing for the observed corporate 40-43 network.
-systemctl disable --now andon-client-register.service >/dev/null 2>&1 || true
-systemctl disable --now andon-network-fix.service >/dev/null 2>&1 || true
-systemctl disable --now dci-mdns.service >/dev/null 2>&1 || true
+# ---------------------------------------------------------------------
+# Remove R2.3 broad /24 policy. It was not the exact Warehouse mechanism.
+# ---------------------------------------------------------------------
+say "Retirando policy /24 R2.3"
+systemctl disable --now andon-dci-vlan-routing.service >/dev/null 2>&1 || true
 rm -f \
-  /usr/local/sbin/andon-network-fix.sh \
-  /usr/local/sbin/andon-client-register.py \
-  /etc/systemd/system/andon-network-fix.service \
-  /etc/systemd/system/andon-client-register.service \
-  /etc/systemd/system/dci-mdns.service \
-  /etc/NetworkManager/dispatcher.d/90-andon-network-fix
+  /usr/local/sbin/andon-dci-vlan-routing.sh \
+  /etc/andon-dci-network.env \
+  /etc/systemd/system/andon-dci-vlan-routing.service \
+  /etc/NetworkManager/dispatcher.d/91-andon-dci-vlan-routing
 
-# ----------------------------------------------------------------------
-# R2.1 FIX:
-# The hosts receive /22 masks, but observed L2 reachability is segmented by
-# third octet. 10.138.41.x cannot ARP 10.138.43.x directly.
-# Therefore:
-#   own 10.138.<octet>.0/24 -> link/direct
-#   other 10.138.40/41/42/43 /24 -> gateway
-# A /32 link route keeps the gateway itself reachable even when its /24 is
-# routed through the gateway.
-# ----------------------------------------------------------------------
-cat > "$ROUTER" <<'EOF_ROUTER'
+# Remove only exact /24 routes introduced by R2.3; the kernel's connected /22
+# route remains untouched.
+for n in 40 41 42 43; do
+  NET="10.138.${n}.0/24"
+  while ip -4 route show "$NET" 2>/dev/null | grep -q .; do
+    ip -4 route del "$NET" 2>/dev/null || break
+  done
+done
+# R2.3 also created a host route to the gateway.
+while ip -4 route show "$GATEWAY/32" 2>/dev/null | grep -q .; do
+  ip -4 route del "$GATEWAY/32" 2>/dev/null || break
+done
+systemctl daemon-reload
+
+# ---------------------------------------------------------------------
+# Restore the proven Warehouse/ANDON model:
+# Windows: server /32 via its active gateway.
+# RPi: client /32 return route via RPi gateway.
+# Same third-octet /24 is the exception: direct, no artificial gateway route.
+# ---------------------------------------------------------------------
+say "Instalando rutas de retorno por cliente"
+mkdir -p "$STATE_DIR"
+touch "$CLIENTS_FILE"
+chmod 0644 "$CLIENTS_FILE"
+
+cat > "$FIX" <<'EOF_FIX'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[[ -f /etc/andon-dci-network.env ]] && source /etc/andon-dci-network.env
 
-SERVICE_IP="${SERVICE_IP:-10.138.43.217}"
+CLIENTS_FILE="/var/lib/andon-network-fix/clients.txt"
+SERVICE_IP="${ANDON_DCI_SERVICE_IP:-10.138.43.217}"
 
 IFACE="$(
   ip -4 -o addr show scope global |
   awk -v ip="$SERVICE_IP" '$4 ~ ("^" ip "/") {print $2; exit}'
 )"
-[[ -n "${IFACE:-}" ]] || {
+if [[ -z "${IFACE:-}" ]]; then
   line="$(ip -4 route show default | head -n1)"
   IFACE="$(awk '{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}' <<<"$line")"
   SERVICE_IP="$(ip -4 -o addr show dev "$IFACE" scope global | awk 'NR==1{split($4,a,"/");print a[1]}')"
-}
-
+fi
 GW="$(ip -4 route show default dev "$IFACE" | awk 'NR==1{print $3}')"
 [[ -n "${IFACE:-}" && -n "${SERVICE_IP:-}" && -n "${GW:-}" ]] || exit 20
 
-OCT3="$(awk -F. '{print $3}' <<<"$SERVICE_IP")"
-LOCAL_NET="10.138.${OCT3}.0/24"
+MY_OCT3="$(awk -F. '{print $3}' <<<"$SERVICE_IP")"
 
-# Gateway must always remain directly ARP-reachable.
-ip -4 route replace "$GW/32" dev "$IFACE" src "$SERVICE_IP" scope link metric 1
+while IFS= read -r CLIENT_IP; do
+  [[ "$CLIENT_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
+  CLIENT_OCT3="$(awk -F. '{print $3}' <<<"$CLIENT_IP")"
 
-for n in 40 41 42 43; do
-  NET="10.138.${n}.0/24"
-  if [[ "$NET" == "$LOCAL_NET" ]]; then
-    ip -4 route replace "$NET" dev "$IFACE" src "$SERVICE_IP" scope link metric 5
+  # Remove any old host route first.
+  while ip -4 route show "$CLIENT_IP/32" 2>/dev/null | grep -q .; do
+    ip -4 route del "$CLIENT_IP/32" 2>/dev/null || break
+  done
+
+  if [[ "$CLIENT_OCT3" == "$MY_OCT3" ]]; then
+    logger -t andon-network-fix "DIRECT client=$CLIENT_IP iface=$IFACE"
   else
-    ip -4 route replace "$NET" via "$GW" dev "$IFACE" src "$SERVICE_IP" metric 10
+    ip -4 route replace "$CLIENT_IP/32" via "$GW" dev "$IFACE" src "$SERVICE_IP" metric 5
+    logger -t andon-network-fix "ROUTED client=$CLIENT_IP via=$GW iface=$IFACE"
   fi
-done
+done < "$CLIENTS_FILE"
+EOF_FIX
+chmod 0755 "$FIX"
 
-logger -t andon-dci-routing \
-  "service=$SERVICE_IP iface=$IFACE gw=$GW local=$LOCAL_NET policy=VLAN24"
-EOF_ROUTER
-chmod 0755 "$ROUTER"
-
-cat > "$ROUTE_ENV" <<EOF_ENV
-SERVICE_IP=$SERVICE_IP
-EOF_ENV
-chmod 0644 "$ROUTE_ENV"
-
-cat > /etc/systemd/system/andon-dci-vlan-routing.service <<'EOF_SERVICE'
+cat > /etc/systemd/system/andon-network-fix.service <<'EOF_SERVICE'
 [Unit]
-Description=ANDON/DCI corporate VLAN /24 routing policy
+Description=ANDON/DCI Automatic Client Return Routes
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/andon-dci-vlan-routing.sh
+ExecStart=/usr/local/sbin/andon-network-fix.sh
 RemainAfterExit=yes
 
 [Install]
@@ -237,28 +227,104 @@ WantedBy=multi-user.target
 EOF_SERVICE
 
 mkdir -p /etc/NetworkManager/dispatcher.d
-cat > /etc/NetworkManager/dispatcher.d/91-andon-dci-vlan-routing <<'EOF_NM'
+cat > /etc/NetworkManager/dispatcher.d/90-andon-network-fix <<'EOF_DISPATCH'
 #!/usr/bin/env bash
 case "${2:-}" in
   up|dhcp4-change|connectivity-change)
-    systemctl restart andon-dci-vlan-routing.service >/dev/null 2>&1 || true
+    systemctl restart andon-network-fix.service >/dev/null 2>&1 || true
     ;;
 esac
-EOF_NM
-chmod 0755 /etc/NetworkManager/dispatcher.d/91-andon-dci-vlan-routing
+EOF_DISPATCH
+chmod 0755 /etc/NetworkManager/dispatcher.d/90-andon-network-fix
+
+say "Instalando registro UDP automatico de clientes"
+cat > "$REGISTER" <<'PY'
+#!/usr/bin/env python3
+import socket, subprocess, pathlib, ipaddress
+
+PORT=8788
+CLIENTS=pathlib.Path("/var/lib/andon-network-fix/clients.txt")
+FIX="/usr/local/sbin/andon-network-fix.sh"
+CLIENTS.parent.mkdir(parents=True,exist_ok=True)
+CLIENTS.touch(exist_ok=True)
+
+def register(addr):
+    ip=str(ipaddress.ip_address(addr))
+    old=[]
+    for x in CLIENTS.read_text(encoding="utf-8",errors="ignore").splitlines():
+        x=x.strip()
+        if not x:
+            continue
+        try:
+            old.append(str(ipaddress.ip_address(x)))
+        except Exception:
+            pass
+    if ip not in old:
+        old.append(ip)
+        CLIENTS.write_text("\n".join(old)+"\n",encoding="utf-8")
+    subprocess.run([FIX],check=False)
+    return ip
+
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(("0.0.0.0",PORT))
+print(f"ANDON/DCI UDP client register listening on {PORT}",flush=True)
+
+while True:
+    data,addr=s.recvfrom(1024)
+    msg=data.decode("utf-8","ignore").strip()
+    if msg.startswith("ANDON_REGISTER_V1") or msg.startswith("ANDON_DCI_REGISTER_V2"):
+        try:
+            ip=register(addr[0])
+            s.sendto(("ANDON_DCI_OK "+ip).encode(),addr)
+        except Exception as e:
+            try:
+                s.sendto(("ANDON_DCI_ERROR "+str(e)).encode(),addr)
+            except Exception:
+                pass
+PY
+chmod 0755 "$REGISTER"
+
+cat > /etc/systemd/system/andon-client-register.service <<'EOF_REGISTER'
+[Unit]
+Description=ANDON/DCI UDP Automatic Client Registration
+After=network-online.target andon-network-fix.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/andon-client-register.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF_REGISTER
 
 systemctl daemon-reload
-systemctl enable andon-dci-vlan-routing.service >/dev/null
-systemctl restart andon-dci-vlan-routing.service
+systemctl enable andon-network-fix.service >/dev/null
+systemctl enable andon-client-register.service >/dev/null
+systemctl restart andon-network-fix.service
+systemctl restart andon-client-register.service
+systemctl is-active --quiet andon-client-register.service || die "Registro UDP no quedo activo."
 
-# Loose reverse-path filtering for routed VLAN return traffic.
+# Loose reverse path filtering for asymmetric routed VLANs.
 cat > /etc/sysctl.d/90-andon-dci-network.conf <<EOF_SYSCTL
 net.ipv4.conf.$TARGET_IF.rp_filter=2
 EOF_SYSCTL
 sysctl -p /etc/sysctl.d/90-andon-dci-network.conf >/dev/null
 
-# Bonjour/mDNS: valid on the local L2 only. Cross-VLAN name resolution still
-# needs infrastructure mDNS reflection or a unicast DNS/hosts fallback.
+# Firewall only if UFW is active.
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+  ufw allow in on "$TARGET_IF" to any port 80 proto tcp >/dev/null || true
+  ufw allow in on "$TARGET_IF" to any port 8788 proto udp >/dev/null || true
+  ufw allow in on "$TARGET_IF" to any port 5353 proto udp >/dev/null || true
+fi
+
+# ---------------------------------------------------------------------
+# Bonjour + canonical Nginx, kept idempotent.
+# ---------------------------------------------------------------------
+say "Asegurando Bonjour/mDNS y Nginx"
 mkdir -p /etc/avahi/services
 cat > /etc/avahi/avahi-daemon.conf <<EOF_AVAHI
 [server]
@@ -286,13 +352,13 @@ EOF_AVAHI
 touch /etc/avahi/hosts
 python3 - "$SERVICE_IP" <<'PY'
 from pathlib import Path
-import re, sys
+import re,sys
 ip=sys.argv[1]
-p=Path('/etc/avahi/hosts')
-lines=p.read_text(encoding='utf-8',errors='ignore').splitlines() if p.exists() else []
+p=Path("/etc/avahi/hosts")
+lines=p.read_text(encoding="utf-8",errors="ignore").splitlines() if p.exists() else []
 out=[x for x in lines if not re.search(r'(^|\s)(andon|dci)\.local(\s|$)',x,re.I)]
-out += [f'{ip} andon.local',f'{ip} dci.local']
-p.write_text('\n'.join(out).rstrip()+'\n',encoding='utf-8')
+out += [f"{ip} andon.local",f"{ip} dci.local"]
+p.write_text("\n".join(out).rstrip()+"\n",encoding="utf-8")
 PY
 
 cat > /etc/avahi/services/andon.service <<'EOF_ANDON'
@@ -325,9 +391,7 @@ EOF_DCI
 
 systemctl enable avahi-daemon >/dev/null
 systemctl restart avahi-daemon
-systemctl is-active --quiet avahi-daemon || die "avahi-daemon no quedo activo"
 
-# Shared Nginx remains canonical.
 mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 cat > /etc/nginx/sites-available/andon <<'EOF_NA'
 server {
@@ -355,9 +419,7 @@ server {
     listen [::]:80;
     server_name dci.local;
     client_max_body_size 0;
-
     location = / { return 302 /datacenter/; }
-
     location /datacenter/ {
         proxy_pass http://127.0.0.1:3100/datacenter/;
         proxy_http_version 1.1;
@@ -370,7 +432,6 @@ server {
         proxy_read_timeout 300;
         proxy_send_timeout 300;
     }
-
     location /api/ {
         proxy_pass http://127.0.0.1:3100/api/;
         proxy_http_version 1.1;
@@ -388,39 +449,31 @@ ln -sfn /etc/nginx/sites-available/dci /etc/nginx/sites-enabled/dci
 nginx -t
 systemctl enable nginx >/dev/null
 systemctl reload nginx || systemctl restart nginx
-systemctl is-active --quiet nginx || die "nginx no quedo activo"
 
 if [[ -f "$SCRIPT_DIR/diagnostico-red-andondci.sh" ]]; then
   install -m 0755 "$SCRIPT_DIR/diagnostico-red-andondci.sh" /usr/local/sbin/DIAGNOSTICO-ANDON-DCI-RED
 fi
-if [[ -f "$SCRIPT_DIR/rollback-red-andondci.sh" ]]; then
-  install -m 0755 "$SCRIPT_DIR/rollback-red-andondci.sh" /usr/local/sbin/ROLLBACK-ANDON-DCI-RED
-fi
 
-ip -4 route show table main > "$BACKUP/routes-after.txt" || true
 printf '%s\n' "$CORE_VERSION" > /var/lib/andon-dci-network-core.version
-
+ip -4 route show table main > "$BACKUP/routes-after.txt" || true
 trap - ERR
+
 cat <<EOF_DONE
 
 ======================================================================
  ANDON/DCI NETWORK CORE $CORE_VERSION OK
 ======================================================================
+Modelo restaurado:
+- Windows remoto -> RPi /32 via gateway
+- RPi -> cliente remoto /32 via gateway
+- registro UDP automatico puerto 8788
+- mismo tercer octeto /24 -> directo, sin ruta artificial
+- rutas de clientes persistidas en $CLIENTS_FILE
+
 Service IP : $SERVICE_IP
 Interface  : $TARGET_IF
-OS CIDR    : ${LOCAL_CIDRS[*]}
-L2 direct  : $LOCAL_L2_NET
 Gateway    : $GATEWAY
-
-Routing policy:
-- same third-octet /24 -> DIRECT L2
-- other 10.138.40-43 /24 -> VIA GATEWAY
-- gateway itself -> DIRECT /32
-
-ANDON : http://andon.local/
-DCI   : http://dci.local/datacenter/
-
-NOTE: .local/mDNS remains L2-local. Cross-VLAN clients need mDNS reflection
-or a unicast DNS/hosts fallback.
+ANDON      : http://andon.local/
+DCI        : http://dci.local/datacenter/
 ======================================================================
 EOF_DONE
