@@ -85,7 +85,17 @@ if($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$'){
 }
 
 $tag = "v$Version"
-Set-Content ".\VERSION" $Version -Encoding ASCII
+# ANDON_RELEASE_VERSION_READONLY_R2
+# El publisher NO modifica VERSION. La version debe venir ya guardada,
+# commiteada y publicada en Git antes de crear la Release.
+$VersionFile = ".\VERSION"
+if(-not (Test-Path -LiteralPath $VersionFile -PathType Leaf)){
+    Fail "Falta VERSION en el repositorio."
+}
+$RepoVersion = (Get-Content -LiteralPath $VersionFile -Raw).Trim()
+if($RepoVersion -ne $Version){
+    Fail "VERSION=$RepoVersion pero se solicito $Version. Actualiza VERSION LOCAL, commit/push y vuelve a publicar."
+}
 
 Step "Validando sintaxis y dependencias"
 & node.exe --check ".\src\server.js"
