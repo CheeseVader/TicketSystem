@@ -1,0 +1,12 @@
+{
+    "coreVersion":  "2.3.4",
+    "action":  "PENDING_POSTINSTALL",
+    "result":  "PENDING",
+    "currentBssidBefore":  null,
+    "historicalBssid":  null,
+    "currentBssidAfter":  null,
+    "currentMacBefore":  null,
+    "baselineMac":  null,
+    "generatedBy":  "Windows publisher R2.7.3",
+    "timestampUtc":  "2026-10-02T22:11:45.6929027Z"
+}

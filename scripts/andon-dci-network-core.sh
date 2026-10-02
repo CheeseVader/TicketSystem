@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-CORE_VERSION="2.3.3"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CORE_VERSION="2.3.4"
 SERVICE_IP="${ANDON_DCI_SERVICE_IP:-10.138.43.217}"
 BACKUP_ROOT="/var/backups/andon-dci-network-core"
 RECOVERY_ROOT="/var/backups/andon-dci-network-recovery"
@@ -335,14 +336,21 @@ p.parent.mkdir(parents=True,exist_ok=True)
 p.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
 PY
 
-  # Expose status through ANDON static content when possible.
-  for pub in \
-    /opt/andon/app/public \
-    "$SCRIPT_DIR/../public"
-  do
+  # Expose status through ANDON static content.
+  # IMPORTANT:
+  # - /opt/andon/app/public updates the currently installed ANDON.
+  # - SCRIPT_DIR/../public updates the staged ANDON payload when this script
+  #   is running from an ANDON release, so the file survives the final swap.
+  pubs=(/opt/andon/app/public)
+  stage_public="$SCRIPT_DIR/../public"
+  if [[ -d "$stage_public" ]]; then
+    pubs+=("$stage_public")
+  fi
+
+  for pub in "${pubs[@]}"; do
     if [[ -d "$pub" ]]; then
-      cp -f "$STATUS_JSON" "$pub/network-recovery-status.json" 2>/dev/null || true
-      chmod 0644 "$pub/network-recovery-status.json" 2>/dev/null || true
+      cp -f "$STATUS_JSON" "$pub/network-recovery-status.json"
+      chmod 0644 "$pub/network-recovery-status.json" || true
     fi
   done
 }
