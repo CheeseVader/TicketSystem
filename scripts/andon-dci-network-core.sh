@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-CORE_VERSION="2.2.0"
+CORE_VERSION="2.3.0"
 SERVICE_IP="${ANDON_DCI_SERVICE_IP:-10.138.43.217}"
 STATE_DIR="/var/lib/andon-network-fix"
 CLIENTS_FILE="$STATE_DIR/clients.txt"
@@ -20,7 +20,7 @@ die(){ printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Este postinstall requiere root."
 
-say "ANDON/DCI Network Core $CORE_VERSION - Warehouse routing model"
+say "ANDON/DCI Network Core $CORE_VERSION - universal routed access model"
 
 TARGET_IF="$(
   ip -4 -o addr show scope global 2>/dev/null |
@@ -191,6 +191,40 @@ GW="$(ip -4 route show default dev "$IFACE" | awk 'NR==1{print $3}')"
 [[ -n "${IFACE:-}" && -n "${SERVICE_IP:-}" && -n "${GW:-}" ]] || exit 20
 
 MY_OCT3="$(awk -F. '{print $3}' <<<"$SERVICE_IP")"
+NET_PREFIX="$(awk -F. '{print $1"."$2}' <<<"$SERVICE_IP")"
+
+# ------------------------------------------------------------------
+# Universal routed access for the overlapping corporate /22.
+#
+# The RPi can receive 10.138.40.0/22 from DHCP even though the real
+# client networks are separated as /24 VLANs. Without more-specific
+# routes Linux attempts ARP directly for 40/41/42 clients and replies
+# never return through the corporate gateway.
+#
+# Keep the service's own /24 direct. Route the other 40-43 /24s through
+# the real gateway. A /32 link route to the gateway prevents recursive
+# lookup when the gateway itself is inside one of those routed /24s.
+#
+# Networks outside this overlapping range continue to use the normal
+# default route, so any routable corporate network remains reachable.
+# ------------------------------------------------------------------
+ip -4 route replace "$GW/32" dev "$IFACE" scope link src "$SERVICE_IP" metric 1
+
+for OCT in 40 41 42 43; do
+  NET="$NET_PREFIX.$OCT.0/24"
+
+  if [[ "$OCT" == "$MY_OCT3" ]]; then
+    # Same real /24 as the RPi: direct L2. Remove only an artificial
+    # gateway route for this exact /24 if an older policy left one.
+    while ip -4 route show "$NET" 2>/dev/null | grep -q ' via '; do
+      ip -4 route del "$NET" 2>/dev/null || break
+    done
+    logger -t andon-network-fix "DIRECT_NET net=$NET iface=$IFACE"
+  else
+    ip -4 route replace "$NET" via "$GW" dev "$IFACE" src "$SERVICE_IP" metric 20
+    logger -t andon-network-fix "ROUTED_NET net=$NET via=$GW iface=$IFACE"
+  fi
+done
 
 while IFS= read -r CLIENT_IP; do
   [[ "$CLIENT_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
@@ -213,7 +247,7 @@ chmod 0755 "$FIX"
 
 cat > /etc/systemd/system/andon-network-fix.service <<'EOF_SERVICE'
 [Unit]
-Description=ANDON/DCI Automatic Client Return Routes
+Description=ANDON/DCI Universal Routed Access and Client Return Routes
 After=network-online.target
 Wants=network-online.target
 
@@ -463,11 +497,13 @@ cat <<EOF_DONE
 ======================================================================
  ANDON/DCI NETWORK CORE $CORE_VERSION OK
 ======================================================================
-Modelo restaurado:
-- Windows remoto -> RPi /32 via gateway
-- RPi -> cliente remoto /32 via gateway
+Modelo activo:
+- VLAN real de la RPi /24 -> directa
+- VLAN 40/41/42/43 remota -> gateway corporativo
+- gateway protegido con ruta /32 scope-link
+- cualquier otra red enrutable -> default route normal
+- Windows remoto registrado -> /32 via gateway (mayor prioridad)
 - registro UDP automatico puerto 8788
-- mismo tercer octeto /24 -> directo, sin ruta artificial
 - rutas de clientes persistidas en $CLIENTS_FILE
 
 Service IP : $SERVICE_IP
