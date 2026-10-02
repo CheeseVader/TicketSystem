@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-CORE_VERSION="2.3.2"
+CORE_VERSION="2.3.3"
 SERVICE_IP="${ANDON_DCI_SERVICE_IP:-10.138.43.217}"
 BACKUP_ROOT="/var/backups/andon-dci-network-core"
 RECOVERY_ROOT="/var/backups/andon-dci-network-recovery"
@@ -16,7 +16,7 @@ die(){ printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Este recovery requiere root."
 
-say "ANDON/DCI Network Recovery $CORE_VERSION - restore pre-change network state"
+say "ANDON/DCI Wi-Fi L2 Recovery $CORE_VERSION - pre-change association recovery"
 
 TARGET_IF="$(
   ip -4 -o addr show scope global 2>/dev/null |
@@ -197,6 +197,9 @@ rollback(){
   rc=$?
   trap - ERR
   warn "Recovery fallo RC=$rc. Restaurando automaticamente el estado previo a esta actualizacion."
+  if declare -F restore_wifi_profile >/dev/null 2>&1; then
+    restore_wifi_profile || true
+  fi
   restore_runtime_from_snapshot "$SAFETY" || true
 
   if [[ -f "$SAFETY/core-marker.before" ]]; then
@@ -275,6 +278,297 @@ systemctl is-active --quiet avahi-daemon
 # Confirm the old Avahi behavior was really restored.
 grep -q 'enable-wide-area=yes' /etc/avahi/avahi-daemon.conf
 
+
+# ---------------------------------------------------------------------
+# Wi-Fi L2 recovery
+#
+# Evidence from mobile:
+# - Android ARP Request for SERVICE_IP reaches wlan0.
+# - RPi sends ARP Reply.
+# - Mobile repeats ARP and never starts TCP.
+#
+# A safe RPi-side action is therefore limited to restoring the previous
+# Wi-Fi association/profile when that exact historical association can be
+# discovered. This block NEVER invents an AP/BSSID and NEVER leaves the
+# RPi disconnected: any failed reassociation triggers automatic rollback.
+# ---------------------------------------------------------------------
+say "Wi-Fi L2: buscando asociacion PRE-CAMBIO verificable"
+
+WIFI_DIR="/var/lib/andon-dci-wifi-recovery"
+STATUS_JSON="$WIFI_DIR/status.json"
+mkdir -p "$WIFI_DIR"
+
+WIFI_TOUCHED=0
+WIFI_CON_NAME=""
+WIFI_CON_UUID=""
+ORIG_BSSID_PIN=""
+ORIG_CLONED_MAC=""
+ORIG_POWERSAVE=""
+CURRENT_BSSID_BEFORE=""
+CURRENT_BSSID_AFTER=""
+HIST_BSSID=""
+SSID=""
+BASELINE_MAC=""
+CURRENT_MAC_BEFORE=""
+WIFI_ACTION="NO_SAFE_CHANGE"
+WIFI_RESULT="UNCHANGED"
+
+json_status(){
+  python3 - "$STATUS_JSON" \
+    "$CORE_VERSION" "$WIFI_ACTION" "$WIFI_RESULT" \
+    "$CURRENT_BSSID_BEFORE" "$HIST_BSSID" "$CURRENT_BSSID_AFTER" \
+    "$CURRENT_MAC_BEFORE" "$BASELINE_MAC" <<'PY'
+import json,sys,datetime,pathlib
+p=pathlib.Path(sys.argv[1])
+data={
+  "coreVersion":sys.argv[2],
+  "action":sys.argv[3],
+  "result":sys.argv[4],
+  "currentBssidBefore":sys.argv[5] or None,
+  "historicalBssid":sys.argv[6] or None,
+  "currentBssidAfter":sys.argv[7] or None,
+  "currentMacBefore":sys.argv[8] or None,
+  "baselineMac":sys.argv[9] or None,
+  "timestampUtc":datetime.datetime.now(datetime.timezone.utc).isoformat()
+}
+p.parent.mkdir(parents=True,exist_ok=True)
+p.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
+PY
+
+  # Expose status through ANDON static content when possible.
+  for pub in \
+    /opt/andon/app/public \
+    "$SCRIPT_DIR/../public"
+  do
+    if [[ -d "$pub" ]]; then
+      cp -f "$STATUS_JSON" "$pub/network-recovery-status.json" 2>/dev/null || true
+      chmod 0644 "$pub/network-recovery-status.json" 2>/dev/null || true
+    fi
+  done
+}
+
+restore_wifi_profile(){
+  [[ "${WIFI_TOUCHED:-0}" == "1" ]] || return 0
+  [[ -n "${WIFI_CON_UUID:-}" ]] || return 0
+  command -v nmcli >/dev/null 2>&1 || return 0
+
+  warn "Wi-Fi rollback: restaurando perfil NetworkManager original."
+
+  nmcli connection modify uuid "$WIFI_CON_UUID" \
+    802-11-wireless.bssid "$ORIG_BSSID_PIN" >/dev/null 2>&1 || true
+
+  nmcli connection modify uuid "$WIFI_CON_UUID" \
+    802-11-wireless.cloned-mac-address "$ORIG_CLONED_MAC" >/dev/null 2>&1 || true
+
+  if [[ -n "$ORIG_POWERSAVE" ]]; then
+    nmcli connection modify uuid "$WIFI_CON_UUID" \
+      802-11-wireless.powersave "$ORIG_POWERSAVE" >/dev/null 2>&1 || true
+  fi
+
+  nmcli connection down uuid "$WIFI_CON_UUID" >/dev/null 2>&1 || true
+  timeout 75s nmcli connection up uuid "$WIFI_CON_UUID" ifname "$TARGET_IF" >/dev/null 2>&1 || true
+
+  # Give DHCP / routes time to settle.
+  for _ in $(seq 1 30); do
+    ip -4 addr show dev "$TARGET_IF" | grep -q "$SERVICE_IP/" && break
+    sleep 1
+  done
+
+  # Restore known-good return routes after reconnect.
+  ip -4 route replace 10.138.41.0/24 via "$GATEWAY" dev "$TARGET_IF" src "$SERVICE_IP" metric 20 >/dev/null 2>&1 || true
+  ip -4 route replace 10.138.42.0/24 via "$GATEWAY" dev "$TARGET_IF" src "$SERVICE_IP" metric 20 >/dev/null 2>&1 || true
+
+  WIFI_ACTION="ROLLBACK_PROFILE"
+  WIFI_RESULT="ROLLED_BACK"
+  CURRENT_BSSID_AFTER="$(iw dev "$TARGET_IF" link 2>/dev/null | awk '/Connected to/{print tolower($3);exit}')"
+  json_status || true
+}
+
+if command -v nmcli >/dev/null 2>&1 && command -v iw >/dev/null 2>&1; then
+  WIFI_CON_NAME="$(nmcli -g GENERAL.CONNECTION device show "$TARGET_IF" 2>/dev/null | head -n1 || true)"
+  if [[ -n "$WIFI_CON_NAME" && "$WIFI_CON_NAME" != "--" ]]; then
+    WIFI_CON_UUID="$(nmcli -g connection.uuid connection show "$WIFI_CON_NAME" 2>/dev/null | head -n1 || true)"
+  fi
+
+  SSID="$(iw dev "$TARGET_IF" link 2>/dev/null | sed -n 's/^[[:space:]]*SSID:[[:space:]]*//p' | head -n1)"
+  CURRENT_BSSID_BEFORE="$(iw dev "$TARGET_IF" link 2>/dev/null | awk '/Connected to/{print tolower($3);exit}')"
+  CURRENT_MAC_BEFORE="$(cat "/sys/class/net/$TARGET_IF/address" 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+
+  # Extract the MAC wlan0 used in the known-good September baseline snapshot.
+  BASE_ARCHIVE="/home/andon/ANDON-CORE-NETWORK-BASELINE-R1-andon-20260914-152255.tar.gz"
+  if [[ -f "$BASE_ARCHIVE" ]]; then
+    BTMP="$(mktemp -d)"
+    if tar -xzf "$BASE_ARCHIVE" -C "$BTMP" >/dev/null 2>&1; then
+      BADDR="$(find "$BTMP" -type f -path '*/baseline/network/ip-addr.txt' | head -n1 || true)"
+      if [[ -n "$BADDR" ]]; then
+        BASELINE_MAC="$(
+          awk '
+            /^[0-9]+: wlan0:/ {inside=1; next}
+            /^[0-9]+: / {inside=0}
+            inside && /link\/ether/ {print tolower($2); exit}
+          ' "$BADDR"
+        )"
+      fi
+    fi
+    rm -rf "$BTMP"
+  fi
+
+  # Use the timestamp of the detected pre-change backup as journal cutoff.
+  # We only accept an AP/BSSID that was actually used before that backup.
+  CBASE="$(basename "$CANDIDATE")"
+  CUTOFF=""
+  if [[ "$CBASE" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})-([0-9]{2})([0-9]{2})([0-9]{2})$ ]]; then
+    CUTOFF="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}"
+  fi
+
+  if [[ -n "$CUTOFF" ]]; then
+    HIST_BSSID="$(
+      journalctl --no-pager --until "$CUTOFF" 2>/dev/null |
+      grep -Ei 'CTRL-EVENT-CONNECTED|Connection to ([0-9a-f]{2}:){5}[0-9a-f]{2}|associated with ([0-9a-f]{2}:){5}[0-9a-f]{2}|BSSID[ =:]' |
+      grep -Eio '([0-9a-f]{2}:){5}[0-9a-f]{2}' |
+      tr '[:upper:]' '[:lower:]' |
+      tail -n1 || true
+    )"
+  fi
+
+  # If the pre-change cutoff journal does not contain a BSSID, use the
+  # last BSSID from the known-good September baseline window.
+  if [[ -z "$HIST_BSSID" ]]; then
+    HIST_BSSID="$(
+      journalctl --no-pager \
+        --since "2026-09-13 00:00:00" \
+        --until "2026-09-17 23:59:59" 2>/dev/null |
+      grep -Ei 'CTRL-EVENT-CONNECTED|Connection to ([0-9a-f]{2}:){5}[0-9a-f]{2}|associated with ([0-9a-f]{2}:){5}[0-9a-f]{2}|BSSID[ =:]' |
+      grep -Eio '([0-9a-f]{2}:){5}[0-9a-f]{2}' |
+      tr '[:upper:]' '[:lower:]' |
+      tail -n1 || true
+    )"
+  fi
+
+  if [[ -n "$WIFI_CON_UUID" ]]; then
+    ORIG_BSSID_PIN="$(nmcli -g 802-11-wireless.bssid connection show uuid "$WIFI_CON_UUID" 2>/dev/null | head -n1 || true)"
+    ORIG_CLONED_MAC="$(nmcli -g 802-11-wireless.cloned-mac-address connection show uuid "$WIFI_CON_UUID" 2>/dev/null | head -n1 || true)"
+    ORIG_POWERSAVE="$(nmcli -g 802-11-wireless.powersave connection show uuid "$WIFI_CON_UUID" 2>/dev/null | head -n1 || true)"
+  fi
+
+  HIST_VISIBLE=0
+  if [[ -n "$HIST_BSSID" && -n "$SSID" ]]; then
+    if iw dev "$TARGET_IF" scan 2>/dev/null |
+      awk -v want="$SSID" -v wantb="$HIST_BSSID" '
+        /^BSS / {
+          b=tolower($2); sub(/\(.*/,"",b)
+        }
+        /^[[:space:]]*SSID:/ {
+          s=$0
+          sub(/^[[:space:]]*SSID:[[:space:]]*/,"",s)
+          if (s==want && b==wantb) found=1
+        }
+        END {exit(found?0:1)}
+      '
+    then
+      HIST_VISIBLE=1
+    fi
+  fi
+
+  NEED_BSSID=0
+  NEED_MAC=0
+
+  if [[ -n "$HIST_BSSID" && "$HIST_VISIBLE" == "1" && "$HIST_BSSID" != "$CURRENT_BSSID_BEFORE" ]]; then
+    NEED_BSSID=1
+  fi
+
+  # Only restore baseline MAC when it is a valid unicast MAC and differs.
+  if [[ "$BASELINE_MAC" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ &&
+        -n "$CURRENT_MAC_BEFORE" &&
+        "$BASELINE_MAC" != "$CURRENT_MAC_BEFORE" ]]; then
+    first_octet=$((16#${BASELINE_MAC%%:*}))
+    if (( (first_octet & 1) == 0 )); then
+      NEED_MAC=1
+    fi
+  fi
+
+  if [[ "$NEED_BSSID" == "1" || "$NEED_MAC" == "1" ]]; then
+    [[ -n "$WIFI_CON_UUID" ]] || die "Wi-Fi recovery requiere UUID de conexion NetworkManager."
+
+    WIFI_TOUCHED=1
+    WIFI_ACTION="RESTORE_PRECHANGE_WIFI_PROFILE"
+
+    if [[ "$NEED_BSSID" == "1" ]]; then
+      say "Wi-Fi L2: restaurando BSSID historico $HIST_BSSID"
+      nmcli connection modify uuid "$WIFI_CON_UUID" 802-11-wireless.bssid "$HIST_BSSID"
+    fi
+
+    if [[ "$NEED_MAC" == "1" ]]; then
+      say "Wi-Fi L2: restaurando MAC de baseline $BASELINE_MAC"
+      nmcli connection modify uuid "$WIFI_CON_UUID" 802-11-wireless.cloned-mac-address "$BASELINE_MAC"
+    fi
+
+    # Prevent client power-save from introducing avoidable unicast loss.
+    nmcli connection modify uuid "$WIFI_CON_UUID" 802-11-wireless.powersave 2
+
+    nmcli connection down uuid "$WIFI_CON_UUID" >/dev/null 2>&1 || true
+    timeout 75s nmcli connection up uuid "$WIFI_CON_UUID" ifname "$TARGET_IF"
+
+    for _ in $(seq 1 45); do
+      if ip -4 addr show dev "$TARGET_IF" | grep -q "$SERVICE_IP/" &&
+         ip -4 route show default dev "$TARGET_IF" | grep -q "via $GATEWAY"; then
+        break
+      fi
+      sleep 1
+    done
+
+    ip -4 addr show dev "$TARGET_IF" | grep -q "$SERVICE_IP/"
+    ip -4 route show default dev "$TARGET_IF" | grep -q "via $GATEWAY"
+    ping -c 1 -W 3 "$GATEWAY" >/dev/null
+
+    CURRENT_BSSID_AFTER="$(iw dev "$TARGET_IF" link 2>/dev/null | awk '/Connected to/{print tolower($3);exit}')"
+
+    if [[ "$NEED_BSSID" == "1" ]]; then
+      [[ "$CURRENT_BSSID_AFTER" == "$HIST_BSSID" ]] || die "La RPi no quedo asociada al BSSID historico."
+    fi
+
+    # Reapply exact known-good return routes after Wi-Fi reconnect.
+    ip -4 route replace 10.138.41.0/24 via "$GATEWAY" dev "$TARGET_IF" src "$SERVICE_IP" metric 20
+    ip -4 route replace 10.138.42.0/24 via "$GATEWAY" dev "$TARGET_IF" src "$SERVICE_IP" metric 20
+
+    if systemctl list-unit-files 2>/dev/null | grep -q '^andon-network-fix\.service'; then
+      systemctl restart andon-network-fix.service >/dev/null 2>&1 || true
+    fi
+
+    curl -fsS --max-time 5 -H 'Host: andon.local' http://127.0.0.1/api/build >/dev/null
+    curl -fsS --max-time 5 -H 'Host: dci.local' http://127.0.0.1/datacenter/ >/dev/null
+
+    WIFI_RESULT="APPLIED"
+    WIFI_TOUCHED=0
+    json_status
+    ok "Wi-Fi L2 recovery aplicado y validado localmente."
+  else
+    CURRENT_BSSID_AFTER="$CURRENT_BSSID_BEFORE"
+
+    if [[ -n "$HIST_BSSID" && "$HIST_BSSID" == "$CURRENT_BSSID_BEFORE" ]]; then
+      WIFI_ACTION="HISTORICAL_BSSID_ALREADY_ACTIVE"
+      WIFI_RESULT="ALREADY_ON_PRECHANGE_BSSID"
+      ok "Wi-Fi ya esta asociado al BSSID historico pre-cambio."
+    elif [[ -n "$HIST_BSSID" && "$HIST_VISIBLE" != "1" ]]; then
+      WIFI_ACTION="HISTORICAL_BSSID_NOT_VISIBLE"
+      WIFI_RESULT="NO_CHANGE"
+      warn "BSSID historico detectado pero no visible actualmente; no se fuerza otro AP."
+    else
+      WIFI_ACTION="NO_VERIFIABLE_HISTORICAL_BSSID"
+      WIFI_RESULT="NO_CHANGE"
+      warn "No hay BSSID historico verificable; no se inventa una asociacion."
+    fi
+
+    json_status
+  fi
+else
+  WIFI_ACTION="NMCLI_OR_IW_UNAVAILABLE"
+  WIFI_RESULT="NO_CHANGE"
+  json_status
+  warn "nmcli/iw no disponible; se conserva red actual."
+fi
+
+
 printf '%s\n' "$CORE_VERSION" > "$MARKER"
 ip -4 route show table main > "$SAFETY/routes-after.txt" || true
 
@@ -283,9 +577,9 @@ trap - ERR
 cat <<EOF
 
 ======================================================================
- ANDON/DCI NETWORK RECOVERY $CORE_VERSION OK
+ ANDON/DCI WI-FI L2 RECOVERY $CORE_VERSION OK
 ======================================================================
-Se restauro automaticamente la capa de red PRE-CAMBIO conocida como funcional.
+Se restauro la capa de red PRE-CAMBIO y se evaluo/restauro la asociacion Wi-Fi historica de forma segura.
 
 Backup origen : $CANDIDATE
 Safety backup : $SAFETY
@@ -302,6 +596,7 @@ Validado:
 - ANDON localhost OK
 - DCI localhost OK
 - Avahi OK
+- Wi-Fi L2 recovery evaluado
 
 Si cualquiera de estas validaciones hubiera fallado, el script habria
 restaurado automaticamente el estado previo a esta actualizacion.
